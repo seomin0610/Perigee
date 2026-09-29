@@ -1,0 +1,3 @@
+[submodule "external/RadiantTidal"]
+	path = external/RadiantTidal
+	url = https://github.com/seomin0610/rl-iOS
