@@ -3,8 +3,9 @@
 set -e
 cd "$(dirname "$0")"
 
-# The stamp is also TidalCore's build: tag the GitHub release v$TT_BUILD for its update notice
-export TT_BUILD="${TT_BUILD:-$(date +%y%m%d-%H%M)}"
+# TidalCore's version, compared with the latest GitHub release tag (vX.Y.Z) for its update notice
+export TT_BUILD="${TT_BUILD:-$(git describe --tags 2>/dev/null || echo dev)}"
+export TT_BUILD="${TT_BUILD#v}"
 ipa="${1:-TIDAL Music_ HiFi Sound_2.215.0_decrypted.ipa}"
 [ -f "$ipa" ] || { echo "IPA not found: $ipa" >&2; exit 1; }
 tidal=$(python3 -c '
@@ -44,5 +45,33 @@ p['LSSupportsOpeningDocumentsInPlace'] = True
 plistlib.dump(p, open(f, 'wb'), fmt=plistlib.FMT_BINARY)
 PY
 (cd "$tmp" && zip -q "$out" Payload/*/Info.plist)
+
+# Rootless jailbreak deb. Substrate and ElleKit load DynamicLibraries alphabetically, so A_, B_, ... keep the
+# order above (TidalCore strips the prefix). No SideloadFix: an App Store install isn't re-signed.
+lib="$tmp/deb/var/jb/Library/MobileSubstrate/DynamicLibraries"
+mkdir -p "$lib" "$tmp/deb/DEBIAN"
+set -- A B C D E F G H I J K L M N O P
+for d in $dylibs; do
+	n=$(basename "$d" .dylib)
+	[ "$n" = TidalSideloadFix ] && continue
+	cp "$d" "$lib/${1}_$n.dylib"
+	echo '{ Filter = { Bundles = ( "com.aspiro.TIDAL" ); }; }' >"$lib/${1}_$n.plist"
+	shift
+done
+case $TT_BUILD in [0-9]*) v=$TT_BUILD ;; *) v=0~$TT_BUILD ;; esac # dpkg versions start with a digit
+cat >"$tmp/deb/DEBIAN/control" <<EOF
+Package: com.seomin0610.perigee
+Name: Perigee
+Version: $v
+Architecture: iphoneos-arm64
+Description: Tweaks for TIDAL
+Maintainer: seomin0610
+Author: seomin0610
+Section: Tweaks
+Depends: mobilesubstrate
+EOF
+deb="${out%.ipa}.deb"
+dpkg-deb -Zxz --root-owner-group -b "$tmp/deb" "$deb" >/dev/null
 rm -rf "$tmp"
-echo "==> $out (release tag v$TT_BUILD)"
+echo "==> $out"
+echo "==> $deb (version $TT_BUILD)"

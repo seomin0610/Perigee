@@ -65,6 +65,7 @@ static void TTScan(void) {
 	NSMutableArray *loaded = [NSMutableArray array];
 	for (uint32_t i = 0; i < _dyld_image_count(); i++) {
 		NSString *name = [@(_dyld_get_image_name(i)).lastPathComponent stringByDeletingPathExtension];
+		name = [name componentsSeparatedByString:@"_"].lastObject;
 		if (![names containsObject:name]) continue;
 		found[name] = TTVersion((const struct mach_header_64 *)_dyld_get_image_header(i));
 		[loaded addObject:name];
@@ -428,7 +429,7 @@ static NSString *TTString(id textOrBlock) {
 		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 	} else if (ip.row == 0) {
 		c = UIListContentConfiguration.valueCellConfiguration;
-		c.text = TTL(@"Build", @"빌드");
+		c.text = TTL(@"Version", @"버전");
 		c.secondaryText = TT_BUILD;
 		cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	} else if (ip.row <= (NSInteger)gLoaded.count) {

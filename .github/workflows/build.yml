@@ -1,0 +1,47 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: Decrypted TIDAL IPA URL (empty = IPA_URL secret)
+        required: false
+  workflow_call:
+
+jobs:
+  build:
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer # ships the iPhoneOS26.5 SDK the Makefiles target
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0 # git describe needs the tags
+
+      - name: Install Theos and cyan
+        run: |
+          brew install ldid dpkg
+          git clone --recursive --depth 1 https://github.com/theos/theos.git ~/theos
+          pipx install https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Download TIDAL IPA
+        env:
+          IPA_URL: ${{ inputs.ipa_url || secrets.IPA_URL }}
+        run: |
+          [ -n "$IPA_URL" ] || { echo "::error::Set the IPA_URL secret or the ipa_url input"; exit 1; }
+          curl -fsSL -o tidal.ipa "$IPA_URL"
+
+      - name: Build
+        env:
+          TT_BUILD: ${{ github.ref_type == 'tag' && github.ref_name || '' }} # empty: build-all.sh uses git describe
+        run: ./build-all.sh tidal.ipa
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Perigee
+          path: |
+            Perigee_*.ipa
+            Perigee_*.deb
+          if-no-files-found: error

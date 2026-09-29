@@ -13,4 +13,4 @@ With TidalCore installed, the other tweaks leave their own buttons out of TIDAL'
 
     ./build.sh
 
-`../../build-all.sh` builds every tweak and injects them into one IPA, `Perigee_TIDAL_<TIDAL version>_<stamp>.ipa`. Publish it as GitHub release `v<stamp>` for the update notice to find it.
+`../../build-all.sh` builds every tweak and injects them into one IPA, `Perigee_TIDAL_<TIDAL version>_<version>.ipa`. The update notice compares this version with the latest published GitHub release tag `vX.Y.Z`.
