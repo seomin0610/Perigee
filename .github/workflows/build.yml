@@ -20,9 +20,12 @@ jobs:
           fetch-depth: 0 # git describe needs the tags
 
       - name: Install Theos and cyan
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # install-sdk calls the GitHub API
         run: |
           brew install ldid dpkg
           git clone --recursive --depth 1 https://github.com/theos/theos.git ~/theos
+          THEOS=~/theos ~/theos/bin/install-sdk iPhoneOS16.5 >/dev/null # RadiantTidal targets 16.5; Xcode only has 26.5
           pipx install https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
