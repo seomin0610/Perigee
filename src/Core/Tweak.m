@@ -100,6 +100,17 @@ static void TTAlert(NSString *title, NSString *message, NSArray<UIAlertAction *>
 	[TTTop() presentViewController:ac animated:YES completion:nil];
 }
 
+static void TTAskRestart(void) {
+	TTAlert(TTL(@"Restart TIDAL to apply this change.", @"이 사항을 적용하려면 앱 재시작이 필요합니다."), nil, @[
+		[UIAlertAction actionWithTitle:TTL(@"Later", @"나중에") style:UIAlertActionStyleCancel handler:nil],
+		[UIAlertAction actionWithTitle:TTL(@"Restart", @"재시작") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+			[NSUserDefaults.standardUserDefaults synchronize];
+			[UIApplication.sharedApplication performSelector:@selector(suspend)];
+			dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ exit(0); });
+		}],
+	]);
+}
+
 static void TTCheckUpdate(BOOL manual) {
 	NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
 	if (!manual) {
@@ -225,7 +236,7 @@ static NSString *TTString(id textOrBlock) {
 	if ([_tweak[5] boolValue]) {
 		NSString *footer = TTL(@"Takes effect the next time TIDAL starts.", @"TIDAL을 다시 시작하면 적용돼요.");
 		if (!ran) footer = [footer stringByAppendingString:TTL(@" Its settings show up once it's running.", @" 켜진 채로 시작하면 설정이 나와요.")];
-		[sections addObject:@{ @"items": @[ @{ @"type": @"switch", @"key": TTKey(dylib), @"default": _tweak[8], @"title": TTL(@"Enabled", @"사용") } ],
+		[sections addObject:@{ @"items": @[ @{ @"type": @"switch", @"key": TTKey(dylib), @"default": _tweak[8], @"restart": @(ran), @"title": TTL(@"Enabled", @"사용") } ],
 		                       @"footer": [NSString stringWithFormat:@"%@\n%@", footer, about] }];
 	} else {
 		[sections addObject:@{ @"items": @[], @"footer": [NSString stringWithFormat:@"%@\n%@", TTL(@"Always on: TIDAL needs it.", @"항상 켜져 있어요: TIDAL에 필요해요."), about] }];
@@ -288,6 +299,7 @@ static NSString *TTString(id textOrBlock) {
 			NSArray *confirm = item[@"confirm"];
 			if (!confirm || !s.on) {
 				TTWrite(item, @(s.on));
+				if (item[@"restart"] && s.on != [item[@"restart"] boolValue]) TTAskRestart();
 				// rebuilding now replaces the switch mid-slide and kills its iOS 26 animation
 				dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [ws refreshSoon]; });
 				return;
