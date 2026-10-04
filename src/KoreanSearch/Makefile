@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = TidalKoreanSearch
 TidalKoreanSearch_FILES = Tweak.m KSResolve.m KSMatch.m
 TidalKoreanSearch_CFLAGS = -fobjc-arc -Wall
-TidalKoreanSearch_CFLAGS += -F$(SYSROOT)/System/Library/SubFrameworks # Xcode 26 SDKs keep some UIKit headers here; Theos' clang doesn't look there
+TidalKoreanSearch_CFLAGS += -F$(SYSROOT)/System/Library/SubFrameworks
 TidalKoreanSearch_FRAMEWORKS = Foundation
 TidalKoreanSearch_USE_MODULES = 0
 

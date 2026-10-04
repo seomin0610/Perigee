@@ -1,6 +1,4 @@
-// Hook order matters: RL and TidalMeanings also hook setNowPlayingInfo: and read title/artist from it. This
-// dylib must hook first, so theirs wrap ours and see the untouched info, and our re-sends go straight to
-// MediaPlayer. If something hooked before us, the feature turns itself off (see LLInit).
+// Must hook setNowPlayingInfo: before RL/Meanings so they see the untouched info; turns itself off otherwise.
 #import "LL.h"
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
@@ -234,7 +232,6 @@ static NSURLSessionDataTask *hook_dataTask(NSURLSession *self, SEL _cmd, NSURLRe
 
 static NSArray<LLLine *> *LLFromTidal(NSString *title) {
 	BOOL asking = NO;
-	// ponytail: matched by title alone; two tracks with one title take the first with lyrics
 	for (NSString *tid in gTidalTitles) {
 		if (![gTidalTitles[tid] containsObject:title]) continue;
 		NSString *lrc = gTidalLRC[tid];
@@ -389,7 +386,6 @@ __attribute__((constructor)) static void LLInit(void) {
 	Method get = class_getInstanceMethod(c, @selector(nowPlayingInfo));
 	if (!set || !get) return LLLog(@"MPNowPlayingInfoCenter methods missing, off");
 
-	// Someone hooked the setter before us: they'd see the line as the artist (RL would refetch lyrics for it)
 	Dl_info dl;
 	if (!dladdr((void *)method_getImplementation(set), &dl) || !strstr(dl.dli_fname, "MediaPlayer"))
 		return LLLog(@"setNowPlayingInfo: already hooked by %s — inject TidalLockLyrics before other tweaks. Off.", dl.dli_fname ?: "?");

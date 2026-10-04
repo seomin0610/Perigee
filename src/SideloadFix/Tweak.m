@@ -1,10 +1,5 @@
-// Re-signed (sideloaded) TIDAL loses its original team's entitlements, but it still asks for them:
-// Info.plist "Keychain Access Group" = GK2243L7KB.com.aspiro.TIDAL.sharedItems and
-// "App Groups" = group.com.aspiro.TIDAL.sharedItems. Every keychain call then fails
-// (errSecMissingEntitlement) — login tokens and keys never persist, so TIDAL forgets the login
-// on relaunch and falls back to LOW quality. The old team's group can never be entitled after
-// re-signing, so drop the access group from TIDAL's keychain calls (items land in / are searched
-// across the groups the app really has), and hand out a private folder for the app-group container.
+// Re-signed TIDAL still asks for the old team's keychain/app group: every keychain call fails
+// (errSecMissingEntitlement) and the login is lost on relaunch. Drop the access group, fake the app-group container.
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>
 #import <mach-o/dyld.h>

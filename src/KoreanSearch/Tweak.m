@@ -112,7 +112,7 @@ static void KSTracks(NSString *phrase, NSURLRequest *search, void (^done)(NSArra
 
 @implementation KSProtocol {
 	NSURLSessionDataTask *_task;
-	id _runLoop; // client thread's: NSURLProtocolClient calls go back there
+	id _runLoop; // NSURLProtocolClient calls must go back to the client thread
 	NSArray *_modes;
 }
 
@@ -194,7 +194,6 @@ static void KSTracks(NSString *phrase, NSURLRequest *search, void (^done)(NSArra
 }
 @end
 
-// TIDAL's sessions have their own configurations: put KSProtocol in every configuration's protocol list
 static NSArray *(*orig_protocolClasses)(NSURLSessionConfiguration *, SEL);
 static NSArray *hook_protocolClasses(NSURLSessionConfiguration *self, SEL _cmd) {
 	NSArray *a = orig_protocolClasses(self, _cmd) ?: @[];
@@ -207,7 +206,7 @@ static NSArray *hook_protocolClasses(NSURLSessionConfiguration *self, SEL _cmd) 
 @end
 @implementation KSSettings
 + (NSArray *)ttSections {
-	void (^again)(id) = ^(id v) { KSCacheClear(); }; // searched already? look again with the new settings
+	void (^again)(id) = ^(id v) { KSCacheClear(); };
 	return @[
 		@{ @"header": KSL(@"Where to look", @"찾는 곳"),
 		   @"items": @[

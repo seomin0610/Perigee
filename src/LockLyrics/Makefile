@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = TidalLockLyrics
 TidalLockLyrics_FILES = Tweak.m Art.m Settings.m
 TidalLockLyrics_CFLAGS = -fobjc-arc -Wall
-TidalLockLyrics_CFLAGS += -F$(SYSROOT)/System/Library/SubFrameworks # Xcode 26 SDKs keep some UIKit headers here; Theos' clang doesn't look there
+TidalLockLyrics_CFLAGS += -F$(SYSROOT)/System/Library/SubFrameworks
 TidalLockLyrics_FRAMEWORKS = UIKit MediaPlayer QuartzCore AVFoundation CoreMedia CoreGraphics
 TidalLockLyrics_USE_MODULES = 0
 

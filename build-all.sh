@@ -3,7 +3,6 @@
 set -e
 cd "$(dirname "$0")"
 
-# TidalCore's version, compared with the latest GitHub release tag (vX.Y.Z) for its update notice
 export TT_BUILD="${TT_BUILD:-$(git describe --tags 2>/dev/null || echo dev)}"
 export TT_BUILD="${TT_BUILD#v}"
 ipa="${1:-TIDAL Music_ HiFi Sound_2.215.0_decrypted.ipa}"
@@ -58,7 +57,7 @@ for d in $dylibs; do
 	echo '{ Filter = { Bundles = ( "com.aspiro.TIDAL" ); }; }' >"$lib/${1}_$n.plist"
 	shift
 done
-case $TT_BUILD in [0-9]*) v=$TT_BUILD ;; *) v=0~$TT_BUILD ;; esac # dpkg versions start with a digit
+case $TT_BUILD in [0-9]*) v=$TT_BUILD ;; *) v=0~$TT_BUILD ;; esac
 cat >"$tmp/deb/DEBIAN/control" <<EOF
 Package: com.seomin0610.perigee
 Name: Perigee

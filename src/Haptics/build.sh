@@ -1,5 +1,4 @@
 #!/bin/sh
-# Extra dylibs load before TidalHaptics (TidalLockLyrics must hook setNowPlayingInfo: first).
 # Also sets Info.plist MusicHapticsSupported, without which iOS ignores the app.
 set -e
 cd "$(dirname "$0")"

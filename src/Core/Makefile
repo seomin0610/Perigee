@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = TidalCore
 TidalCore_FILES = Tweak.m
 TidalCore_CFLAGS = -fobjc-arc -Wall
-TidalCore_CFLAGS += -F$(SYSROOT)/System/Library/SubFrameworks # Xcode 26 SDKs keep some UIKit headers here; Theos' clang doesn't look there
+TidalCore_CFLAGS += -F$(SYSROOT)/System/Library/SubFrameworks
 ifdef TT_BUILD
 TidalCore_CFLAGS += -DTT_BUILD='@"$(TT_BUILD)"'
 endif

@@ -2,7 +2,6 @@
 #import <AVFoundation/AVFoundation.h>
 #import <dlfcn.h>
 
-// MPMediaItemAnimatedArtwork is iOS 26 (SDK here is 16.5): declared for the call, found at runtime
 @interface NSObject (LLAnimatedArtwork)
 - (instancetype)initWithArtworkID:(NSString *)artworkID
        previewImageRequestHandler:(void (^)(CGSize size, void (^completion)(UIImage *image)))preview

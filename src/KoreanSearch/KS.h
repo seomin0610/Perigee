@@ -1,11 +1,10 @@
 #import <Foundation/Foundation.h>
 
-#define kKSHandled @"ks.handled" // NSURLProtocol property on our own requests: never intercepted
+#define kKSHandled @"ks.handled"
 
 void KSLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
-void KSCacheClear(void); // settings changed: search again instead of showing the old answer
+void KSCacheClear(void);
 
-// Settings (NSUserDefaults, "ks." prefix). TidalCore draws them (KSSettings in Tweak.m); with no Core these defaults stand.
 #define KSDefaults NSUserDefaults.standardUserDefaults
 static inline BOOL KSBool(NSString *k, BOOL d) { id v = [KSDefaults objectForKey:[@"ks." stringByAppendingString:k]]; return v ? [v boolValue] : d; }
 static inline NSInteger KSNum(NSString *k, NSInteger d) { id v = [KSDefaults objectForKey:[@"ks." stringByAppendingString:k]]; return v ? [v integerValue] : d; }

@@ -71,10 +71,7 @@ static NSInteger MTMarkStyle(void) {
 	return v ? [v integerValue] : 1;
 }
 
-// genius.com's own web API (no key) sits behind Cloudflare, which may challenge a plain request
-// (403 + a JavaScript check). Then the request is made from inside a hidden web view on genius.com,
-// which runs the check like Safari would. Or the official api.genius.com, with the user's free
-// Client Access Token (genius.com/api-clients), which has no such check.
+// genius.com web API can hit a Cloudflare JS check (403): retried from a hidden web view on genius.com
 static NSString *MTGeniusToken(void) { return [[NSUserDefaults.standardUserDefaults stringForKey:@"mt.geniusToken"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]; }
 
 static NSString *gGeniusStatus;
@@ -327,7 +324,6 @@ static void MTLoadTranslations(void) {
 }
 
 static void MTSaveTranslations(void) {
-	// ponytail: whole cache dropped past 5000 entries (a few MB); LRU if that ever bites
 	if (gTranslated.count > 5000) [gTranslated removeAllObjects];
 	[gTranslated writeToURL:MTCacheFile() error:nil];
 }
@@ -376,9 +372,7 @@ static void MTTranslate(NSArray<NSString *> *bodies, NSString *lang, void (^done
 
 #pragma mark - Settings
 
-// Grouped lists with their colours pinned: in an iOS 26 sheet UIKit switches a grouped table's
-// automatic colours with the sheet's state, and the cells sometimes came up the same colour as the
-// sheet (no cards, bold white headers) until shown again.
+// Colours pinned: in an iOS 26 sheet grouped-table cells sometimes come up the same colour as the sheet
 @interface MTGroupedTable : UITableViewController
 @end
 @implementation MTGroupedTable
@@ -781,8 +775,7 @@ static void *MTIvar(id obj, const char *name) {
 	return iv ? (char *)(__bridge void *)obj + ivar_getOffset(iv) : NULL;
 }
 
-// NowPlayingHostingController's view model; its ivars may not be listed (Swift generic superclass),
-// then look through its fields for one.
+// ivars may not be listed (Swift generic superclass)
 static id MTViewModel(UIViewController *host) {
 	void **slot = MTIvar(host, "viewModel");
 	if (slot) return (__bridge id)*slot;
@@ -897,9 +890,7 @@ static NSArray<NSValue *> *MTRows(UIView *lv) {
 	return rows;
 }
 
-// The mark is a shape in a clipping box around the line view. To blur it like RadiantTidal blurs
-// the words of lines not being sung, it is drawn the same way RadiantTidal draws them: the shape
-// moved out of the box, only its shadow (radius = the blur) landing back in place.
+// Blurred like RadiantTidal: shape moved out of the clip box, only its shadow lands in place
 static const CGFloat kMarkMargin = 24;
 
 static CALayer *MTMarkLayer(UIView *lv, NSInteger style, BOOL byArtist) {
@@ -913,7 +904,6 @@ static CALayer *MTMarkLayer(UIView *lv, NSInteger style, BOOL byArtist) {
 	l.shadowColor = UIColor.whiteColor.CGColor;
 	BOOL right = [[[lv valueForKey:@"line"] valueForKey:@"right"] boolValue];
 	if (style == 1) {
-		// ponytail: underline 2pt above the row's line box bottom; tune against a screenshot
 		for (NSValue *v in rows) {
 			CGRect r = v.CGRectValue;
 			[path moveToPoint:CGPointMake(CGRectGetMinX(r), CGRectGetMaxY(r) - 2)];
@@ -1018,7 +1008,6 @@ static void MTSync(void) {
 	if (!shown || gRL.window || !gMeanings.count) { [gButton removeFromSuperview]; return; }
 	if (!gButton) gButton = MTMakeButton();
 	if (gButton.superview != hv) [hv addSubview:gButton];
-	// ponytail: fixed spot under the player's header; move once seen on device
 	gButton.frame = CGRectMake(hv.bounds.size.width - 16 - 40, hv.safeAreaInsets.top + 64, 40, 40);
 	[hv bringSubviewToFront:gButton];
 }
@@ -1041,8 +1030,7 @@ static void MTPollUpdate(void) {
 	MTSync();
 }
 
-// In TIDAL's Settings: a button in its navigation bar. The footer is RadiantTidal's; wrapping it too
-// would make RadiantTidal wrap it again on every visit.
+// Not the footer: RadiantTidal would wrap it again on every visit
 @interface MTSettingsTarget : NSObject
 @end
 static __weak UIViewController *gSettingsScene;

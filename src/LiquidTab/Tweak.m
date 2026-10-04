@@ -113,7 +113,6 @@ static BOOL LTIsSelected(UIButton *b) { return CGColorGetAlpha(b.tintColor.CGCol
 	CGRect _grown;
 }
 
-// UIKit places its accessory container at a fixed height; after every placement stretch it upward by kMiniGrow.
 - (UIView *)grow {
 	UIView *box = nil;
 	for (UIView *v = self.superview; v && ![v isKindOfClass:LTPass.class]; v = v.superview)
@@ -230,7 +229,7 @@ static __weak LTTabs *gTabs;
 	for (UIView *s in gv.view.subviews)
 		LTHide(s);
 	gv.view.userInteractionEnabled = NO;
-	BOOL *noCollapse = LTBoolIvar(LTIvar(gv, "viewModel"), "isCollapseDisabled"); // UIKit minimizes now; keep TIDAL from animating the mini player we borrowed
+	BOOL *noCollapse = LTBoolIvar(LTIvar(gv, "viewModel"), "isCollapseDisabled"); // keep TIDAL from animating the mini player we borrowed
 	if (noCollapse) *noCollapse = YES;
 	[self follow];
 	[self syncTabs];
@@ -266,8 +265,7 @@ static __weak LTTabs *gTabs;
 	}
 }
 
-// Fold / unfold the bar the way UIKit does it itself (same morph animation), driven by our own scroll rule:
-// UIKit only watches a list inside its own tab, and TIDAL's lists are not.
+// UIKit only folds for a list inside its own tab; TIDAL's lists are not, so we drive it
 - (void)minimize:(BOOL)want {
 	id provider = LTIvar(self.tabBar, "_visualProvider");
 	SEL set = @selector(setMinimized:), target = @selector(currentMorphTarget);
@@ -377,7 +375,7 @@ __attribute__((constructor)) static void LTInit(void) {
 		LTLog(@"turned off in TidalCore's settings");
 		return;
 	}
-	if (!NSClassFromString(@"UITabAccessory")) { // iOS < 26 has no floating glass tab bar: stay out, TIDAL keeps its own
+	if (!NSClassFromString(@"UITabAccessory")) {
 		LTLog(@"iOS < 26, not loading");
 		return;
 	}

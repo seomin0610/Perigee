@@ -109,7 +109,6 @@ static NSArray<NSDictionary *> *KSTidalSearch(NSURLRequest *search, NSString *qu
 	return KSArr(KSDict(KSDict(KSJSON(KSLoad(KSTidalRequest(search, c.URL))))[@"tracks"])[@"items"]);
 }
 
-// ponytail: first ISRC hit; luna's MediaItem.fromIsrc picks the best-quality one
 static NSDictionary *KSTidalIsrc(NSURLRequest *search, NSString *isrc) {
 	NSURLComponents *c = [NSURLComponents componentsWithString:@"https://openapi.tidal.com/v2/tracks"];
 	c.queryItems = @[ [NSURLQueryItem queryItemWithName:@"countryCode" value:KSCountry(search)], [NSURLQueryItem queryItemWithName:@"filter[isrc]" value:isrc] ];
@@ -125,9 +124,7 @@ static NSDictionary *KSTidalIsrc(NSURLRequest *search, NSString *isrc) {
 
 #pragma mark - Apple Music
 
-// The ko store's /search returns no songs at all (any query: 200 OK, videos only), so it goes the other
-// way round: search the US store (its index finds Hangul queries too) and look the ids up in ko for the
-// Hangul title. Same as the plugin's resolve.ts; test/itunes.live.test.ts there guards the contract.
+// ko store /search returns no songs at all: search the US store, then look the ids up in ko for the Hangul title
 static NSArray<KSCandidate *> *KSItunesCandidates(NSString *phrase) {
 	NSMutableArray *international = [NSMutableArray array];
 	for (NSDictionary *t in KSArr(KSDict(KSGetJSON([NSString stringWithFormat:@"https://itunes.apple.com/search?term=%@&country=US&media=music&entity=song&limit=15", KSEnc(phrase)]))[@"results"]))

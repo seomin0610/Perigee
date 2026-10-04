@@ -1,5 +1,4 @@
 #!/bin/sh
-# TidalLockLyrics goes first: it must hook setNowPlayingInfo: before RL/Meanings (see Tweak.m).
 set -e
 cd "$(dirname "$0")"
 
