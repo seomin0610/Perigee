@@ -10,6 +10,7 @@ Perigee for TIDAL
 | [KoreanSearch](src/KoreanSearch) | Find songs by their Korean titles |
 | [LiquidTab](src/LiquidTab) | The iOS 26 system tab bar |
 | [Privacy](src/Privacy) | Blocks TIDAL's trackers |
+| [Offline](src/Offline) | Download offline tracks from v1 playbackinfo instead of v2 trackManifests |
 | [SideloadFix](src/SideloadFix) | Stay logged in after sideloading (always include it) |
 | [RadiantTidal](external/RadiantTidal) | Radiant Lyrics (submodule, GPL-3.0) |
 
