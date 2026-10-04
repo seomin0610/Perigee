@@ -6,6 +6,7 @@ Re-signing changes the team ID, but TIDAL still uses its original keychain group
 
 - Drops `kSecAttrAccessGroup` from TIDAL's `SecItem*` calls
 - Provides a folder in `Library/AppGroup/<group>` when the app group container is unavailable
+- Makes offline downloads work: the download daemon can't find a re-signed app's default download folder (`nsurlsessiond: … does not have write access to destination directory (null)`), so every asset download goes to `Documents/TidalOffline/<uuid>.movpkg` (visible in the Files app) through the older `assetDownloadTaskWithURLAsset:destinationURL:options:`
 
 Log in once more after installing.
 

@@ -6,6 +6,7 @@
 #import <mach-o/loader.h>
 #import <mach/mach.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <dlfcn.h>
 #include <string.h>
 
@@ -65,8 +66,37 @@ static NSURL *hook_container(NSFileManager *self, SEL _cmd, NSString *group) {
 	return url;
 }
 
+typedef id (*SFAssetTaskIMP)(id, SEL, id, NSString *, NSData *, NSDictionary *);
+static SFAssetTaskIMP orig_assetTask, orig_baseAssetTask;
+static __thread BOOL gInLegacy;
+
+static id SFLegacyAssetTask(id self, id asset, NSDictionary *options) {
+	SEL legacy = NSSelectorFromString(@"assetDownloadTaskWithURLAsset:destinationURL:options:");
+	if (gInLegacy || ![self respondsToSelector:legacy]) return nil;
+	NSURL *dir = [[NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:@"TidalOffline" isDirectory:YES];
+	[NSFileManager.defaultManager createDirectoryAtURL:dir withIntermediateDirectories:YES attributes:nil error:nil];
+	NSURL *dest = [dir URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"movpkg"]];
+	gInLegacy = YES;
+	id task = ((id (*)(id, SEL, id, NSURL *, NSDictionary *))objc_msgSend)(self, legacy, asset, dest, options);
+	gInLegacy = NO;
+	if (task) NSLog(@"[TidalSideloadFix] asset download: into Documents/TidalOffline");
+	else NSLog(@"[TidalSideloadFix] asset download: legacy API refused");
+	return task;
+}
+
+static id hook_assetTask(id self, SEL _cmd, id asset, NSString *title, NSData *art, NSDictionary *options) {
+	return SFLegacyAssetTask(self, asset, options) ?: orig_assetTask(self, _cmd, asset, title, art, options);
+}
+static id hook_baseAssetTask(id self, SEL _cmd, id asset, NSString *title, NSData *art, NSDictionary *options) {
+	return SFLegacyAssetTask(self, asset, options) ?: orig_baseAssetTask(self, _cmd, asset, title, art, options);
+}
+
 __attribute__((constructor)) static void SFSideloadFix(void) {
 	_dyld_register_func_for_add_image(SFRebind);
 	Method m = class_getInstanceMethod(NSFileManager.class, @selector(containerURLForSecurityApplicationGroupIdentifier:));
 	orig_container = (void *)method_setImplementation(m, (IMP)hook_container);
+	SEL sel = NSSelectorFromString(@"assetDownloadTaskWithURLAsset:assetTitle:assetArtworkData:options:");
+	Method t = class_getInstanceMethod(NSClassFromString(@"AVAssetDownloadURLSession"), sel), base = class_getInstanceMethod(NSURLSession.class, sel);
+	if (base) orig_baseAssetTask = (SFAssetTaskIMP)method_setImplementation(base, (IMP)hook_baseAssetTask);
+	if (t && t != base) orig_assetTask = (SFAssetTaskIMP)method_setImplementation(t, (IMP)hook_assetTask);
 }
