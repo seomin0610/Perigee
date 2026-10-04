@@ -37,6 +37,7 @@ static NSArray<NSArray *> *TTTweaks(void) {
 	];
 }
 
+static NSString *const kHomePress = @"tt.homePress";
 static NSString *TTKey(NSString *dylib) { return [NSString stringWithFormat:@"tt.%@.enabled", dylib]; }
 static BOOL TTOn(NSArray *t) {
 	id v = [NSUserDefaults.standardUserDefaults objectForKey:TTKey(t[0])];
@@ -162,9 +163,7 @@ static NSString *TTString(id textOrBlock) {
 	return [textOrBlock isKindOfClass:NSString.class] ? textOrBlock : textOrBlock ? ((TTText)textOrBlock)() : nil;
 }
 
-// Grouped lists with their colours pinned: in an iOS 26 sheet UIKit switches a grouped table's
-// automatic colours with the sheet's state, and the cells sometimes came up the same colour as the
-// sheet (no cards, bold white headers) until shown again.
+// Colours pinned: in an iOS 26 sheet grouped-table cells sometimes come up the same colour as the sheet
 @interface TTGroupedTable : UITableViewController
 @end
 @implementation TTGroupedTable
@@ -289,7 +288,8 @@ static NSString *TTString(id textOrBlock) {
 			NSArray *confirm = item[@"confirm"];
 			if (!confirm || !s.on) {
 				TTWrite(item, @(s.on));
-				[ws refreshSoon];
+				// rebuilding now replaces the switch mid-slide and kills its iOS 26 animation
+				dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [ws refreshSoon]; });
 				return;
 			}
 			UIAlertController *ac = [UIAlertController alertControllerWithTitle:confirm[0] message:confirm[1] preferredStyle:UIAlertControllerStyleAlert];
@@ -392,7 +392,7 @@ static NSString *TTString(id textOrBlock) {
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
-	[self.tableView reloadData]; // "restart to apply" after coming back from a page
+	[self.tableView reloadData];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -402,9 +402,9 @@ static NSString *TTString(id textOrBlock) {
 
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 2; }
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : 2 + gLoaded.count; }
-- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s ? TTL(@"About", @"정보") : nil; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 3; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 1 ? 1 : 2 + gLoaded.count; }
+- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 2 ? TTL(@"About", @"정보") : nil; }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
 	UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
@@ -427,6 +427,16 @@ static NSString *TTString(id textOrBlock) {
 		c.image = [UIImage systemImageNamed:t[4]];
 		c.imageProperties.tintColor = TTOn(t) ? nil : UIColor.tertiaryLabelColor;
 		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+	} else if (ip.section == 1) {
+		c = UIListContentConfiguration.cellConfiguration;
+		c.text = TTL(@"Hold Home Tab to Open", @"홈 탭 길게 눌러서 열기");
+		UISwitch *sw = [UISwitch new];
+		sw.on = [NSUserDefaults.standardUserDefaults boolForKey:kHomePress];
+		[sw addAction:[UIAction actionWithHandler:^(UIAction *a) {
+			[NSUserDefaults.standardUserDefaults setBool:((UISwitch *)a.sender).on forKey:kHomePress];
+		}] forControlEvents:UIControlEventValueChanged];
+		cell.accessoryView = sw;
+		cell.selectionStyle = UITableViewCellSelectionStyleNone;
 	} else if (ip.row == 0) {
 		c = UIListContentConfiguration.valueCellConfiguration;
 		c.text = TTL(@"Version", @"버전");
@@ -451,7 +461,7 @@ static NSString *TTString(id textOrBlock) {
 	[tv deselectRowAtIndexPath:ip animated:YES];
 	if (ip.section == 0 && ip.row == (NSInteger)_tweaks.count) _rlOpen(self);
 	else if (ip.section == 0) [self.navigationController pushViewController:[[TTTweakPage alloc] initWithTweak:_tweaks[ip.row]] animated:YES];
-	else if (ip.row == (NSInteger)gLoaded.count + 1) TTCheckUpdate(YES);
+	else if (ip.section == 2 && ip.row == (NSInteger)gLoaded.count + 1) TTCheckUpdate(YES);
 }
 @end
 
@@ -459,7 +469,7 @@ static NSString *TTString(id textOrBlock) {
 @end
 @implementation TTCore
 + (void)openSettings:(id)sender { [self open:nil from:sender]; }
-// Also called by the tweaks (by name) to jump straight to their page, e.g. Meanings' gear
+// Called by name from other tweaks
 + (void)openTweak:(NSString *)dylib { [self open:dylib from:nil]; }
 
 + (void)open:(NSString *)dylib from:(id)source {
@@ -488,8 +498,7 @@ static UITableView *TTFindTable(UIView *v) {
 	return nil;
 }
 
-// A button in the navigation bar, or on top of the list when TIDAL hides the bar.
-// The footer is RadiantTidal's, so this keeps to the header.
+// Header only: the footer is RadiantTidal's
 static void TTAddSettingsEntry(UIViewController *vc) {
 	UINavigationItem *ni = vc.navigationItem;
 	BOOL has = NO;
@@ -525,6 +534,59 @@ static void TTAddSettingsEntry(UIViewController *vc) {
 	});
 }
 
+#pragma mark - Long press on Home in the tab bar
+
+static BOOL TTHasText(UIView *v, NSString *text) {
+	if ([v isKindOfClass:UILabel.class] && [((UILabel *)v).text isEqualToString:text]) return YES;
+	for (UIView *s in v.subviews) if (TTHasText(s, text)) return YES;
+	return NO;
+}
+
+static UIView *TTTabButtonAt(UIView *v, UITouch *touch, NSString *title) {
+	if (v.hidden || v.alpha < 0.01) return nil;
+	if ([v isKindOfClass:NSClassFromString(@"_UITabButton")]) return [v pointInside:[touch locationInView:v] withEvent:nil] && TTHasText(v, title) ? v : nil;
+	for (UIView *s in v.subviews) {
+		UIView *b = TTTabButtonAt(s, touch, title);
+		if (b) return b;
+	}
+	return nil;
+}
+
+// tag 0 = WiMP.Tab.home
+static UIView *TTHomeTab(UITouch *touch) {
+	for (UIView *v = touch.view; v; v = v.superview) {
+		if ([v isKindOfClass:UIButton.class] && v.tag == 0)
+			for (id t in ((UIButton *)v).allTargets)
+				if ([[(UIButton *)v actionsForTarget:t forControlEvent:UIControlEventTouchUpInside] containsObject:@"tabButtonTapped:"]) return v;
+		if (![v isKindOfClass:UITabBar.class]) continue;
+		if (@available(iOS 18.0, *)) {
+			NSString *title = [TTAs(((UITabBar *)v).delegate, UITabBarController.class) tabForIdentifier:@"liquidtab.0"].title;
+			if (title.length) return TTTabButtonAt(v, touch, title);
+		}
+		return nil;
+	}
+	return nil;
+}
+
+@interface TTHomePress : NSObject <UIGestureRecognizerDelegate>
+@end
+@implementation TTHomePress {
+	__weak UIView *_tab;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)touch {
+	if (![NSUserDefaults.standardUserDefaults boolForKey:kHomePress]) return NO;
+	UIView *tab = TTHomeTab(touch);
+	if (tab) _tab = tab;
+	return tab != nil;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other { return YES; }
+- (void)pressed:(UILongPressGestureRecognizer *)g {
+	if (g.state != UIGestureRecognizerStateBegan || !_tab) return;
+	[[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+	[TTCore open:nil from:_tab];
+}
+@end
+
 static void (*orig_viewWillAppear)(UIViewController *, SEL, BOOL);
 static void hook_viewWillAppear(UIViewController *self, SEL _cmd, BOOL animated) {
 	orig_viewWillAppear(self, _cmd, animated);
@@ -541,6 +603,14 @@ __attribute__((constructor)) static void TTInit(void) {
 
 	[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
 		TTCheckUpdate(NO);
+	}];
+	TTHomePress *home = [TTHomePress new];
+	[NSNotificationCenter.defaultCenter addObserverForName:UIWindowDidBecomeKeyNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+		UIWindow *w = n.object;
+		for (UIGestureRecognizer *g in w.gestureRecognizers) if (g.delegate == home) return;
+		UILongPressGestureRecognizer *g = [[UILongPressGestureRecognizer alloc] initWithTarget:home action:@selector(pressed:)];
+		g.delegate = home;
+		[w addGestureRecognizer:g];
 	}];
 	TTLog(@"loaded, build %@", TT_BUILD);
 }
