@@ -64,7 +64,10 @@ static NSInteger PVGroup(NSURL *url) {
 	NSURL *url = self.request.URL;
 	NSInteger g = PVGroup(url);
 	if (g >= 0 && atomic_fetch_add(&gBlocked[g], 1) == 0) PVLog(@"blocking %@", url.host);
-	[self.client URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotConnectToHost userInfo:@{ NSURLErrorFailingURLErrorKey: url }]];
+	NSHTTPURLResponse *r = [[NSHTTPURLResponse alloc] initWithURL:url statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{ @"Content-Type": @"application/json" }];
+	[self.client URLProtocol:self didReceiveResponse:r cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+	[self.client URLProtocol:self didLoadData:[@"{}" dataUsingEncoding:NSUTF8StringEncoding]];
+	[self.client URLProtocolDidFinishLoading:self];
 }
 - (void)stopLoading {}
 @end

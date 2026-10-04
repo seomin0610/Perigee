@@ -16,7 +16,7 @@ Switches apply right away. Each section's footer counts the requests blocked sin
 
 ## How it works
 
-A URL protocol in every session's configuration fails requests to the blocked hosts with "cannot connect". The data never leaves the phone. The SDKs keep it on disk for a while and retry later. The widget and Siri extensions run in their own processes and aren't covered.
+A URL protocol in every session's configuration answers the blocked hosts itself with an empty `200`. The data never leaves the phone, and the SDKs take it as sent and delete their copy, so nothing is left to send later if a switch is turned off. The widget and Siri extensions run in their own processes and aren't covered.
 
 ## Build
 
