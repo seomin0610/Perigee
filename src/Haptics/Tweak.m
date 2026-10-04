@@ -312,8 +312,7 @@ static void hook_viewDidAppear(UIViewController *self, SEL _cmd, BOOL animated) 
 }
 
 __attribute__((constructor)) static void HTInit(void) {
-	id enabled = [NSUserDefaults.standardUserDefaults objectForKey:@"tt.TidalHaptics.enabled"];
-	if (enabled && ![enabled boolValue] && NSClassFromString(@"TTCore")) return HTLog(@"turned off in TidalCore's settings");
+	if (NSClassFromString(@"TTCore") && ![NSUserDefaults.standardUserDefaults boolForKey:@"tt.TidalHaptics.enabled"]) return HTLog(@"turned off in TidalCore's settings");
 	NSString *const *k = (NSString *const *)dlsym(RTLD_DEFAULT, "MPNowPlayingInfoPropertyInternationalStandardRecordingCode");
 	if (!k) return HTLog(@"no ISRC now playing key (needs iOS 18), off");
 	kISRCKey = *k;

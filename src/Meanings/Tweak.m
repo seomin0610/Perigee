@@ -1120,8 +1120,7 @@ static void hook_setInfo(MPNowPlayingInfoCenter *self, SEL _cmd, NSDictionary *i
 }
 
 __attribute__((constructor)) static void MTInit(void) {
-	id enabled = [NSUserDefaults.standardUserDefaults objectForKey:@"tt.TidalMeanings.enabled"];
-	if (enabled && ![enabled boolValue] && NSClassFromString(@"TTCore")) return MTLog(@"turned off in TidalCore's settings");
+	if (NSClassFromString(@"TTCore") && ![NSUserDefaults.standardUserDefaults boolForKey:@"tt.TidalMeanings.enabled"]) return MTLog(@"turned off in TidalCore's settings");
 	MTHook(MPNowPlayingInfoCenter.class, @selector(setNowPlayingInfo:), (IMP)hook_setInfo, (IMP *)&orig_setInfo);
 	MTHook(UIViewController.class, @selector(viewDidAppear:), (IMP)hook_viewDidAppear, (IMP *)&orig_viewDidAppear);
 	MTHook(UIViewController.class, @selector(viewDidDisappear:), (IMP)hook_viewDidDisappear, (IMP *)&orig_viewDidDisappear);

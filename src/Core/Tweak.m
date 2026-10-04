@@ -17,30 +17,30 @@ static NSString *TTL(NSString *en, NSString *ko) {
 }
 static id TTAs(id v, Class c) { return [v isKindOfClass:c] ? v : nil; }
 
-// dylib, English, Korean, class with +ttSections, icon, can be turned off, what it does (English, Korean)
+// dylib, English, Korean, class with +ttSections, icon, can be turned off, what it does (English, Korean), on by default
 static NSArray<NSArray *> *TTTweaks(void) {
 	return @[
 		@[ @"TidalLockLyrics", @"Lock Screen", @"잠금화면", @"LLSettings", @"lock.iphone", @YES,
-		   @"Lyrics and moving covers on the lock screen", @"잠금화면 가사와 움직이는 커버" ],
+		   @"Lyrics and moving covers on the lock screen", @"잠금화면 가사와 움직이는 커버", @NO ],
 		@[ @"TidalMeanings", @"Lyrics Meanings", @"가사 해설", @"MTSettings", @"quote.bubble", @YES,
-		   @"Genius annotations for lyric lines", @"가사 줄별 Genius 해설" ],
+		   @"Genius annotations for lyric lines", @"가사 줄별 Genius 해설", @NO ],
 		@[ @"TidalHaptics", @"Music Haptics", @"음악 햅틱", @"HTSettings", @"iphone.radiowaves.left.and.right", @YES,
-		   @"Apple's haptic tracks while you listen", @"듣는 곡에 맞춘 Apple 햅틱" ],
+		   @"Apple's haptic tracks while you listen", @"듣는 곡에 맞춘 Apple 햅틱", @NO ],
 		@[ @"TidalKoreanSearch", @"Korean Search", @"한글 검색", @"KSSettings", @"magnifyingglass", @YES,
-		   @"Find songs by their Korean names", @"한글 이름으로 곡 찾기" ],
+		   @"Find songs by their Korean names", @"한글 이름으로 곡 찾기", @NO ],
 		@[ @"TidalLiquidTab", @"Liquid Glass Tab Bar", @"리퀴드 글래스 탭 바", @"", @"dock.rectangle", @YES,
-		   @"iOS 26 floating tab bar", @"iOS 26 떠 있는 탭 바" ],
+		   @"iOS 26 floating tab bar", @"iOS 26 떠 있는 탭 바", @NO ],
 		@[ @"TidalPrivacy", @"Privacy", @"개인정보 보호", @"PVSettings", @"hand.raised", @YES,
-		   @"Blocks TIDAL's trackers", @"TIDAL 추적 차단" ],
+		   @"Blocks TIDAL's trackers", @"TIDAL 추적 차단", @YES ],
 		@[ @"TidalSideloadFix", @"Sideload Fix", @"사이드로드 수정", @"", @"key", @NO, // login breaks without it
-		   @"Keeps you signed in after sideloading", @"사이드로드해도 로그인 유지" ],
+		   @"Keeps you signed in after sideloading", @"사이드로드해도 로그인 유지", @YES ],
 	];
 }
 
 static NSString *TTKey(NSString *dylib) { return [NSString stringWithFormat:@"tt.%@.enabled", dylib]; }
-static BOOL TTOn(NSString *dylib) {
-	id v = [NSUserDefaults.standardUserDefaults objectForKey:TTKey(dylib)];
-	return v ? [v boolValue] : YES;
+static BOOL TTOn(NSArray *t) {
+	id v = [NSUserDefaults.standardUserDefaults objectForKey:TTKey(t[0])];
+	return v ? [v boolValue] : [t[8] boolValue];
 }
 
 static NSDictionary<NSString *, NSString *> *gVersions;
@@ -226,7 +226,7 @@ static NSString *TTString(id textOrBlock) {
 	if ([_tweak[5] boolValue]) {
 		NSString *footer = TTL(@"Takes effect the next time TIDAL starts.", @"TIDAL을 다시 시작하면 적용돼요.");
 		if (!ran) footer = [footer stringByAppendingString:TTL(@" Its settings show up once it's running.", @" 켜진 채로 시작하면 설정이 나와요.")];
-		[sections addObject:@{ @"items": @[ @{ @"type": @"switch", @"key": TTKey(dylib), @"default": @YES, @"title": TTL(@"Enabled", @"사용") } ],
+		[sections addObject:@{ @"items": @[ @{ @"type": @"switch", @"key": TTKey(dylib), @"default": _tweak[8], @"title": TTL(@"Enabled", @"사용") } ],
 		                       @"footer": [NSString stringWithFormat:@"%@\n%@", footer, about] }];
 	} else {
 		[sections addObject:@{ @"items": @[], @"footer": [NSString stringWithFormat:@"%@\n%@", TTL(@"Always on: TIDAL needs it.", @"항상 켜져 있어요: TIDAL에 필요해요."), about] }];
@@ -421,11 +421,11 @@ static NSString *TTString(id textOrBlock) {
 		c = UIListContentConfiguration.subtitleCellConfiguration;
 		c.text = TTL(t[1], t[2]);
 		c.secondaryText = TTL(t[6], t[7]);
-		if (TTOn(t[0]) != gLaunchOn[t[0]].boolValue) c.secondaryText = TTL(@"Restart TIDAL to apply", @"TIDAL을 다시 시작하면 적용돼요");
-		else if (!TTOn(t[0])) c.secondaryText = TTL(@"Off", @"꺼짐");
+		if (TTOn(t) != gLaunchOn[t[0]].boolValue) c.secondaryText = TTL(@"Restart TIDAL to apply", @"TIDAL을 다시 시작하면 적용돼요");
+		else if (!TTOn(t)) c.secondaryText = TTL(@"Off", @"꺼짐");
 		c.secondaryTextProperties.color = UIColor.secondaryLabelColor;
 		c.image = [UIImage systemImageNamed:t[4]];
-		c.imageProperties.tintColor = TTOn(t[0]) ? nil : UIColor.tertiaryLabelColor;
+		c.imageProperties.tintColor = TTOn(t) ? nil : UIColor.tertiaryLabelColor;
 		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 	} else if (ip.row == 0) {
 		c = UIListContentConfiguration.valueCellConfiguration;
@@ -533,7 +533,7 @@ static void hook_viewWillAppear(UIViewController *self, SEL _cmd, BOOL animated)
 
 __attribute__((constructor)) static void TTInit(void) {
 	NSMutableDictionary *on = [NSMutableDictionary dictionary];
-	for (NSArray *t in TTTweaks()) on[t[0]] = @(TTOn(t[0]) || ![t[5] boolValue]);
+	for (NSArray *t in TTTweaks()) on[t[0]] = @(TTOn(t) || ![t[5] boolValue]);
 	gLaunchOn = on;
 
 	Method m = class_getInstanceMethod(UIViewController.class, @selector(viewWillAppear:));

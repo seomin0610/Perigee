@@ -228,8 +228,7 @@ static NSArray *hook_protocolClasses(NSURLSessionConfiguration *self, SEL _cmd) 
 @end
 
 __attribute__((constructor)) static void KSInit(void) {
-	id enabled = [NSUserDefaults.standardUserDefaults objectForKey:@"tt.TidalKoreanSearch.enabled"];
-	if (enabled && ![enabled boolValue] && NSClassFromString(@"TTCore")) {
+	if (NSClassFromString(@"TTCore") && ![NSUserDefaults.standardUserDefaults boolForKey:@"tt.TidalKoreanSearch.enabled"]) {
 		KSLog(@"turned off in TidalCore's settings");
 		return;
 	}

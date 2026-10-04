@@ -382,8 +382,7 @@ static NSDictionary *hook_getInfo(MPNowPlayingInfoCenter *self, SEL _cmd) {
 }
 
 __attribute__((constructor)) static void LLInit(void) {
-	id enabled = [NSUserDefaults.standardUserDefaults objectForKey:@"tt.TidalLockLyrics.enabled"];
-	if (enabled && ![enabled boolValue] && NSClassFromString(@"TTCore")) return LLLog(@"turned off in TidalCore's settings");
+	if (NSClassFromString(@"TTCore") && ![NSUserDefaults.standardUserDefaults boolForKey:@"tt.TidalLockLyrics.enabled"]) return LLLog(@"turned off in TidalCore's settings");
 	gLock = [NSObject new];
 	Class c = MPNowPlayingInfoCenter.class;
 	Method set = class_getInstanceMethod(c, @selector(setNowPlayingInfo:));

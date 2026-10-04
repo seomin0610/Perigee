@@ -373,8 +373,7 @@ static void hook_setBounds(UIScrollView *self, SEL _cmd, CGRect bounds) {
 }
 
 __attribute__((constructor)) static void LTInit(void) {
-	id enabled = [NSUserDefaults.standardUserDefaults objectForKey:@"tt.TidalLiquidTab.enabled"];
-	if (enabled && ![enabled boolValue] && NSClassFromString(@"TTCore")) {
+	if (NSClassFromString(@"TTCore") && ![NSUserDefaults.standardUserDefaults boolForKey:@"tt.TidalLiquidTab.enabled"]) {
 		LTLog(@"turned off in TidalCore's settings");
 		return;
 	}
