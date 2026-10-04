@@ -6,6 +6,7 @@ Settings hub for the TIDAL iOS tweaks. Adds one button to TIDAL's Settings that 
 - Every tweak's settings, drawn on one screen
 - A link to Radiant Lyrics' own settings when it's installed
 - An update notice when a newer release is on GitHub (checked at most once a day)
+- Export Logs: this launch's `[Tidal…]` lines and TIDAL's Offliner logs, as a file to share
 
 With TidalCore installed, the other tweaks leave their own buttons out of TIDAL's Settings. Without it, each tweak works on its own as before.
 

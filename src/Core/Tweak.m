@@ -3,6 +3,7 @@
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <dlfcn.h>
+#import <OSLog/OSLog.h>
 
 #define TTLog(fmt, ...) NSLog(@"[TidalCore] " fmt, ##__VA_ARGS__)
 
@@ -32,12 +33,15 @@ static NSArray<NSArray *> *TTTweaks(void) {
 		   @"iOS 26 floating tab bar", @"iOS 26 떠 있는 탭 바", @NO ],
 		@[ @"TidalPrivacy", @"Privacy", @"개인정보 보호", @"PVSettings", @"hand.raised", @YES,
 		   @"Blocks TIDAL's trackers", @"TIDAL 추적 차단", @YES ],
+		@[ @"TidalOffline", @"Offline Download", @"오프라인 다운로드", @"OFSettings", @"arrow.down.circle", @YES,
+		   @"Pick v1 or v2 for each download", @"다운로드할 때 v1·v2 선택", @NO ],
 		@[ @"TidalSideloadFix", @"Sideload Fix", @"사이드로드 수정", @"", @"key", @NO, // login breaks without it
 		   @"Keeps you signed in after sideloading", @"사이드로드해도 로그인 유지", @YES ],
 	];
 }
 
 static NSString *const kHomePress = @"tt.homePress";
+static NSString *const kSeenBuild = @"tt.seenBuild";
 static NSString *TTKey(NSString *dylib) { return [NSString stringWithFormat:@"tt.%@.enabled", dylib]; }
 static BOOL TTOn(NSArray *t) {
 	id v = [NSUserDefaults.standardUserDefaults objectForKey:TTKey(t[0])];
@@ -414,9 +418,33 @@ static NSString *TTString(id textOrBlock) {
 
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 3; }
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 1 ? 1 : 2 + gLoaded.count; }
-- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 2 ? TTL(@"About", @"정보") : nil; }
+- (void)exportLogs:(UIView *)source {
+	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+		NSError *err;
+		OSLogStore *store = [OSLogStore storeWithScope:OSLogStoreCurrentProcessIdentifier error:&err];
+		NSMutableString *out = [NSMutableString stringWithFormat:@"Perigee %@, TIDAL %@, iOS %@\n", TT_BUILD,
+		                                                       [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"], UIDevice.currentDevice.systemVersion];
+		NSDateFormatter *f = [NSDateFormatter new];
+		f.dateFormat = @"HH:mm:ss.SSS";
+		for (OSLogEntry *e in [store entriesEnumeratorWithOptions:0 position:nil predicate:nil error:&err]) {
+			NSString *sub = [e isKindOfClass:OSLogEntryLog.class] ? ((OSLogEntryLog *)e).subsystem : nil;
+			if ([e.composedMessage containsString:@"[Tidal"] || [sub hasPrefix:@"com.tidal.sdk.offliner"]) [out appendFormat:@"%@ %@\n", [f stringFromDate:e.date], e.composedMessage];
+		}
+		if (err) [out appendFormat:@"%@\n", err];
+		f.dateFormat = @"yyMMdd-HHmmss";
+		NSURL *file = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Perigee-%@.log", [f stringFromDate:NSDate.date]]]];
+		[out writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
+		dispatch_async(dispatch_get_main_queue(), ^{
+			UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:@[ file ] applicationActivities:nil];
+			share.popoverPresentationController.sourceView = source;
+			[self presentViewController:share animated:YES completion:nil];
+		});
+	});
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 4; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 3 ? 2 + gLoaded.count : s == 2 ? 2 : 1; }
+- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 2 ? TTL(@"Advanced", @"고급") : s == 3 ? TTL(@"About", @"정보") : nil; }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
 	UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
@@ -449,6 +477,10 @@ static NSString *TTString(id textOrBlock) {
 		}] forControlEvents:UIControlEventValueChanged];
 		cell.accessoryView = sw;
 		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	} else if (ip.section == 2) {
+		c = UIListContentConfiguration.cellConfiguration;
+		c.text = ip.row ? TTL(@"Export Logs", @"로그 내보내기") : TTL(@"Reset Onboarding", @"온보딩 상태 재설정");
+		c.textProperties.color = self.view.tintColor;
 	} else if (ip.row == 0) {
 		c = UIListContentConfiguration.valueCellConfiguration;
 		c.text = TTL(@"Version", @"버전");
@@ -473,7 +505,11 @@ static NSString *TTString(id textOrBlock) {
 	[tv deselectRowAtIndexPath:ip animated:YES];
 	if (ip.section == 0 && ip.row == (NSInteger)_tweaks.count) _rlOpen(self);
 	else if (ip.section == 0) [self.navigationController pushViewController:[[TTTweakPage alloc] initWithTweak:_tweaks[ip.row]] animated:YES];
-	else if (ip.section == 2 && ip.row == (NSInteger)gLoaded.count + 1) TTCheckUpdate(YES);
+	else if (ip.section == 2 && ip.row) [self exportLogs:[tv cellForRowAtIndexPath:ip]];
+	else if (ip.section == 2) {
+		[NSUserDefaults.standardUserDefaults removeObjectForKey:kSeenBuild];
+		TTAlert(TTL(@"Onboarding reset", @"온보딩 상태를 재설정했어요"), TTL(@"Settings will open the next time TIDAL starts.", @"다음에 TIDAL을 열면 설정이 다시 떠요."), nil);
+	} else if (ip.section == 3 && ip.row == (NSInteger)gLoaded.count + 1) TTCheckUpdate(YES);
 }
 @end
 
@@ -582,20 +618,15 @@ static UIView *TTHomeTab(UITouch *touch) {
 
 @interface TTHomePress : NSObject <UIGestureRecognizerDelegate>
 @end
-@implementation TTHomePress {
-	__weak UIView *_tab;
-}
+@implementation TTHomePress
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)touch {
-	if (![NSUserDefaults.standardUserDefaults boolForKey:kHomePress]) return NO;
-	UIView *tab = TTHomeTab(touch);
-	if (tab) _tab = tab;
-	return tab != nil;
+	return [NSUserDefaults.standardUserDefaults boolForKey:kHomePress] && TTHomeTab(touch);
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other { return YES; }
 - (void)pressed:(UILongPressGestureRecognizer *)g {
-	if (g.state != UIGestureRecognizerStateBegan || !_tab) return;
+	if (g.state != UIGestureRecognizerStateBegan) return;
 	[[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-	[TTCore open:nil from:_tab];
+	[TTCore open:nil from:nil];
 }
 @end
 
@@ -603,6 +634,12 @@ static void (*orig_viewWillAppear)(UIViewController *, SEL, BOOL);
 static void hook_viewWillAppear(UIViewController *self, SEL _cmd, BOOL animated) {
 	orig_viewWillAppear(self, _cmd, animated);
 	if ([self isKindOfClass:objc_getClass("_TtC4WiMP13SettingsScene")]) TTAddSettingsEntry(self);
+	else if ([self isKindOfClass:objc_getClass("_TtC4WiMP9MainScene")]) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+		NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+		if ([[d stringForKey:kSeenBuild] isEqualToString:TT_BUILD]) return;
+		[d setObject:TT_BUILD forKey:kSeenBuild];
+		[TTCore openSettings:nil];
+	});
 }
 
 __attribute__((constructor)) static void TTInit(void) {

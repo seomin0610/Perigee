@@ -10,7 +10,7 @@ TidalCore_CFLAGS += -F$(SYSROOT)/System/Library/SubFrameworks
 ifdef TT_BUILD
 TidalCore_CFLAGS += -DTT_BUILD='@"$(TT_BUILD)"'
 endif
-TidalCore_FRAMEWORKS = UIKit
+TidalCore_FRAMEWORKS = UIKit OSLog
 TidalCore_USE_MODULES = 0
 
 include $(THEOS_MAKE_PATH)/tweak.mk
