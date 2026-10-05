@@ -115,13 +115,130 @@ static void TTAskRestart(void) {
 	]);
 }
 
-static void TTCheckUpdate(BOOL manual) {
-	NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-	if (!manual) {
-		if ([TT_BUILD isEqualToString:@"dev"]) return;
-		if (NSDate.date.timeIntervalSince1970 - [d doubleForKey:@"tt.lastCheck"] < 86400) return;
-		[d setDouble:NSDate.date.timeIntervalSince1970 forKey:@"tt.lastCheck"];
+typedef NS_ENUM(NSInteger, TTUpdateState) { TTUpdateUnknown, TTUpdateChecking, TTUpdateLatest, TTUpdateFailed, TTUpdateAvailable };
+static TTUpdateState gUpdate;
+static NSString *gLatest;
+
+static void TTSetUpdate(TTUpdateState state) {
+	gUpdate = state;
+	[NSNotificationCenter.defaultCenter postNotificationName:@"TTUpdateChanged" object:nil];
+}
+
+// Release notes are Markdown: blocks handled per line, inline styles from the parser's presentation intents
+static NSAttributedString *TTNotes(NSString *md) {
+	NSAttributedStringMarkdownParsingOptions *o = [NSAttributedStringMarkdownParsingOptions new];
+	o.interpretedSyntax = NSAttributedStringMarkdownInterpretedSyntaxInlineOnlyPreservingWhitespace;
+	UIFont *body = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+	UIFont *mono = [UIFont monospacedSystemFontOfSize:body.pointSize * 0.9 weight:UIFontWeightRegular];
+	NSMutableAttributedString *out = [NSMutableAttributedString new];
+	BOOL fence = NO;
+	for (NSString *raw in [[md stringByReplacingOccurrencesOfString:@"\r" withString:@""] componentsSeparatedByString:@"\n"]) {
+		if ([[raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] hasPrefix:@"```"]) {
+			fence = !fence;
+			continue;
+		}
+		if (fence) {
+			[out appendAttributedString:[[NSAttributedString alloc] initWithString:[raw stringByAppendingString:@"\n"] attributes:@{ NSFontAttributeName: mono, NSForegroundColorAttributeName: UIColor.labelColor }]];
+			continue;
+		}
+		if ([raw rangeOfString:@"^\\s*([-*_]\\s*){3,}$" options:NSRegularExpressionSearch].location != NSNotFound) continue;
+		NSString *line = raw;
+		UIFont *font = body;
+		UIColor *color = UIColor.labelColor;
+		NSRange h = [line rangeOfString:@"^#{1,6}\\s+" options:NSRegularExpressionSearch];
+		NSRange q = [line rangeOfString:@"^\\s*>\\s?" options:NSRegularExpressionSearch];
+		if (h.location != NSNotFound) {
+			line = [line substringFromIndex:NSMaxRange(h)];
+			font = [UIFont preferredFontForTextStyle:h.length > 3 ? UIFontTextStyleHeadline : UIFontTextStyleTitle3];
+			font = [UIFont fontWithDescriptor:[font.fontDescriptor fontDescriptorWithSymbolicTraits:UIFontDescriptorTraitBold] ?: font.fontDescriptor size:0];
+		} else if (q.location != NSNotFound) {
+			line = [line substringFromIndex:NSMaxRange(q)];
+			color = UIColor.secondaryLabelColor;
+		}
+		line = [line stringByReplacingOccurrencesOfString:@"^(\\s*)[-*+] " withString:@"$1• " options:NSRegularExpressionSearch range:NSMakeRange(0, line.length)];
+		line = [line stringByAppendingString:@"\n"];
+		NSMutableAttributedString *a = [[[NSAttributedString alloc] initWithMarkdownString:line options:o baseURL:nil error:nil] mutableCopy] ?: [[NSMutableAttributedString alloc] initWithString:line];
+		[a addAttributes:@{ NSFontAttributeName: font, NSForegroundColorAttributeName: color } range:NSMakeRange(0, a.length)];
+		[a enumerateAttribute:NSInlinePresentationIntentAttributeName inRange:NSMakeRange(0, a.length) options:0 usingBlock:^(NSNumber *v, NSRange r, BOOL *stop) {
+			NSInlinePresentationIntent i = v.unsignedIntegerValue;
+			if (i & NSInlinePresentationIntentCode) [a addAttribute:NSFontAttributeName value:mono range:r];
+			else if (i & (NSInlinePresentationIntentStronglyEmphasized | NSInlinePresentationIntentEmphasized)) {
+				UIFontDescriptorSymbolicTraits t = font.fontDescriptor.symbolicTraits;
+				if (i & NSInlinePresentationIntentStronglyEmphasized) t |= UIFontDescriptorTraitBold;
+				if (i & NSInlinePresentationIntentEmphasized) t |= UIFontDescriptorTraitItalic;
+				[a addAttribute:NSFontAttributeName value:[UIFont fontWithDescriptor:[font.fontDescriptor fontDescriptorWithSymbolicTraits:t] ?: font.fontDescriptor size:0] range:r];
+			}
+			if (i & NSInlinePresentationIntentStrikethrough) [a addAttribute:NSStrikethroughStyleAttributeName value:@(NSUnderlineStyleSingle) range:r];
+		}];
+		[out appendAttributedString:a];
 	}
+	return out;
+}
+
+static void TTShowUpdate(NSString *latest, NSString *notes) {
+	UIViewController *vc = [UIViewController new];
+	vc.title = TTL(@"Update Available", @"업데이트 사용 가능");
+	vc.view.backgroundColor = UIColor.systemBackgroundColor;
+	__weak UIViewController *wvc = vc;
+	vc.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemClose primaryAction:[UIAction actionWithHandler:^(UIAction *a) {
+		[wvc dismissViewControllerAnimated:YES completion:nil];
+	}]];
+
+	NSString *current = [TT_BUILD isEqualToString:@"dev"] ? TT_BUILD : [@"v" stringByAppendingString:TT_BUILD];
+	UIFont *title = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+	NSMutableAttributedString *text = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ → v%@\n\n", current, latest] attributes:@{
+		NSFontAttributeName: [UIFont fontWithDescriptor:[title.fontDescriptor fontDescriptorWithSymbolicTraits:UIFontDescriptorTraitBold] size:0],
+		NSForegroundColorAttributeName: UIColor.labelColor }];
+	[text appendAttributedString:TTNotes(notes)];
+	UITextView *tv = [UITextView new];
+	tv.attributedText = text;
+	tv.editable = NO;
+	tv.dataDetectorTypes = UIDataDetectorTypeLink;
+	tv.backgroundColor = UIColor.clearColor;
+	tv.textContainerInset = UIEdgeInsetsMake(8, 0, 16, 0);
+	tv.textContainer.lineFragmentPadding = 0;
+
+	UIButtonConfiguration *gc = UIButtonConfiguration.filledButtonConfiguration;
+	if (@available(iOS 26.0, *)) gc = UIButtonConfiguration.prominentGlassButtonConfiguration;
+	gc.title = TTL(@"Get It on GitHub", @"GitHub에서 받기");
+	gc.buttonSize = UIButtonConfigurationSizeLarge;
+	gc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+	UIButton *get = [UIButton buttonWithConfiguration:gc primaryAction:[UIAction actionWithHandler:^(UIAction *a) {
+		[UIApplication.sharedApplication openURL:[NSURL URLWithString:[NSString stringWithFormat:@"https://github.com/%@/releases/latest", kRepo]] options:@{} completionHandler:nil];
+		[wvc dismissViewControllerAnimated:YES completion:nil];
+	}]];
+	UIButtonConfiguration *sc = UIButtonConfiguration.plainButtonConfiguration;
+	sc.title = TTL(@"Skip This Version", @"이 버전 건너뛰기");
+	sc.buttonSize = UIButtonConfigurationSizeLarge;
+	UIButton *skip = [UIButton buttonWithConfiguration:sc primaryAction:[UIAction actionWithHandler:^(UIAction *a) {
+		[NSUserDefaults.standardUserDefaults setObject:latest forKey:@"tt.skip"];
+		[wvc dismissViewControllerAnimated:YES completion:nil];
+	}]];
+
+	UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[ tv, get, skip ]];
+	stack.axis = UILayoutConstraintAxisVertical;
+	stack.spacing = 4;
+	[stack setCustomSpacing:12 afterView:tv];
+	stack.translatesAutoresizingMaskIntoConstraints = NO;
+	[vc.view addSubview:stack];
+	UILayoutGuide *g = vc.view.layoutMarginsGuide;
+	[NSLayoutConstraint activateConstraints:@[
+		[stack.leadingAnchor constraintEqualToAnchor:g.leadingAnchor],
+		[stack.trailingAnchor constraintEqualToAnchor:g.trailingAnchor],
+		[stack.topAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.topAnchor],
+		[stack.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
+	]];
+
+	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+	nav.sheetPresentationController.detents = @[ UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent ];
+	nav.sheetPresentationController.prefersGrabberVisible = YES;
+	[TTTop() presentViewController:nav animated:YES completion:nil];
+}
+
+static void TTCheckUpdate(BOOL manual) {
+	if (!manual && [TT_BUILD isEqualToString:@"dev"]) return;
+	if (gUpdate == TTUpdateChecking) return;
+	TTSetUpdate(TTUpdateChecking);
 	NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://api.github.com/repos/%@/releases/latest", kRepo]];
 	NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
 	[req setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
@@ -130,29 +247,16 @@ static void TTCheckUpdate(BOOL manual) {
 		NSString *tag = TTAs(j[@"tag_name"], NSString.class);
 		NSString *latest = [tag hasPrefix:@"v"] ? [tag substringFromIndex:1] : tag;
 		NSString *notes = TTAs(j[@"body"], NSString.class) ?: @"";
-		NSURL *page = [NSURL URLWithString:TTAs(j[@"html_url"], NSString.class) ?: @""];
 		dispatch_async(dispatch_get_main_queue(), ^{
 			if (!latest.length) {
 				TTLog(@"update check failed: %@", err ?: @(((NSHTTPURLResponse *)resp).statusCode));
-				if (manual) TTAlert(TTL(@"Couldn't check for updates", @"업데이트를 확인하지 못했어요"), nil, nil);
+				TTSetUpdate(TTUpdateFailed);
 				return;
 			}
 			BOOL newer = [TT_BUILD isEqualToString:@"dev"] || [latest compare:TT_BUILD options:NSNumericSearch] == NSOrderedDescending;
-			if (!newer) {
-				if (manual) TTAlert(TTL(@"You're up to date", @"최신 버전이에요"), TT_BUILD, nil);
-				return;
-			}
-			if (!manual && [[d stringForKey:@"tt.skip"] isEqualToString:latest]) return;
-			NSString *msg = notes.length > 1500 ? [[notes substringToIndex:1500] stringByAppendingString:@"…"] : notes;
-			NSMutableArray *actions = [NSMutableArray array];
-			if (page) [actions addObject:[UIAlertAction actionWithTitle:TTL(@"View on GitHub", @"GitHub에서 보기") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-				[UIApplication.sharedApplication openURL:page options:@{} completionHandler:nil];
-			}]];
-			if (!manual) [actions addObject:[UIAlertAction actionWithTitle:TTL(@"Skip This Version", @"이 버전 건너뛰기") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-				[d setObject:latest forKey:@"tt.skip"];
-			}]];
-			[actions addObject:[UIAlertAction actionWithTitle:TTL(@"Later", @"나중에") style:UIAlertActionStyleCancel handler:nil]];
-			TTAlert([NSString stringWithFormat:TTL(@"New version %@", @"새 버전 %@"), latest], msg, actions);
+			gLatest = latest;
+			TTSetUpdate(newer ? TTUpdateAvailable : TTUpdateLatest);
+			if (newer && (manual || ![[NSUserDefaults.standardUserDefaults stringForKey:@"tt.skip"] isEqualToString:latest])) TTShowUpdate(latest, notes);
 		});
 	}] resume];
 }
@@ -281,6 +385,11 @@ static NSString *TTString(id textOrBlock) {
 	UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
 	UIListContentConfiguration *c = item[@"detail"] ? UIListContentConfiguration.subtitleCellConfiguration : UIListContentConfiguration.valueCellConfiguration;
 	c.text = item[@"title"];
+	if (item[@"image"]) {
+		c.image = item[@"image"];
+		c.imageProperties.maximumSize = c.imageProperties.reservedLayoutSize = CGSizeMake(40, 40);
+		c.imageProperties.cornerRadius = 6;
+	}
 	if (item[@"detail"]) {
 		c.secondaryText = item[@"detail"];
 		c.secondaryTextProperties.color = UIColor.secondaryLabelColor;
@@ -394,6 +503,7 @@ static NSString *TTString(id textOrBlock) {
 @implementation TTSettings {
 	NSArray<NSArray *> *_tweaks;
 	void (*_rlOpen)(UIViewController *);
+	BOOL _showTweaks;
 }
 
 - (void)viewDidLoad {
@@ -404,7 +514,10 @@ static NSString *TTString(id textOrBlock) {
 	self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemClose target:self action:@selector(close)];
 	_tweaks = TTInstalled();
 	_rlOpen = dlsym(RTLD_DEFAULT, "RLOpenSettings");
+	[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(updateChanged:) name:@"TTUpdateChanged" object:nil];
 }
+
+- (void)updateChanged:(NSNotification *)n { [self.tableView reloadData]; }
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
@@ -443,7 +556,7 @@ static NSString *TTString(id textOrBlock) {
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 4; }
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 3 ? 2 + gLoaded.count : s == 2 ? 2 : 1; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 3 ? 3 + (_showTweaks ? gLoaded.count : 0) : s == 2 ? 2 : 1; }
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 2 ? TTL(@"Advanced", @"고급") : s == 3 ? TTL(@"About", @"정보") : nil; }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -486,16 +599,43 @@ static NSString *TTString(id textOrBlock) {
 		c.text = TTL(@"Version", @"버전");
 		c.secondaryText = TT_BUILD;
 		cell.selectionStyle = UITableViewCellSelectionStyleNone;
-	} else if (ip.row <= (NSInteger)gLoaded.count) {
-		NSString *name = gLoaded[ip.row - 1], *v = gVersions[name];
+	} else if (ip.row == 1) {
+		c = UIListContentConfiguration.valueCellConfiguration;
+		c.text = TTL(@"Check for Updates", @"업데이트 확인");
+		c.textProperties.color = self.view.tintColor;
+		switch (gUpdate) {
+		case TTUpdateUnknown: break;
+		case TTUpdateChecking: c.secondaryText = TTL(@"Checking…", @"확인 중…"); break;
+		case TTUpdateLatest:
+			c.secondaryText = TTL(@"Up to date", @"최신 버전");
+			c.secondaryTextProperties.color = UIColor.systemGreenColor;
+			break;
+		case TTUpdateFailed:
+			c.secondaryText = TTL(@"Couldn't check", @"확인 실패");
+			c.secondaryTextProperties.color = UIColor.systemRedColor;
+			break;
+		case TTUpdateAvailable:
+			c.secondaryText = [NSString stringWithFormat:TTL(@"v%@ available", @"v%@ 사용 가능"), gLatest];
+			c.secondaryTextProperties.color = UIColor.systemOrangeColor;
+			break;
+		}
+	} else if (ip.row == 2) {
+		c = UIListContentConfiguration.valueCellConfiguration;
+		c.text = TTL(@"Tweaks", @"트윅");
+		c.secondaryText = [NSString stringWithFormat:@"%lu", (unsigned long)gLoaded.count];
+		UIImageView *chevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right" withConfiguration:[UIImageSymbolConfiguration configurationWithTextStyle:UIFontTextStyleFootnote scale:UIImageSymbolScaleMedium]]];
+		chevron.tintColor = UIColor.tertiaryLabelColor;
+		chevron.transform = _showTweaks ? CGAffineTransformMakeRotation(M_PI_2) : CGAffineTransformIdentity;
+		cell.accessoryView = chevron;
+	} else {
+		NSString *name = gLoaded[ip.row - 3], *v = gVersions[name];
 		c = UIListContentConfiguration.valueCellConfiguration;
 		c.text = name;
 		c.secondaryText = [v isEqualToString:@"0.0.0"] ? nil : v;
+		NSDirectionalEdgeInsets m = c.directionalLayoutMargins;
+		m.leading += 24;
+		c.directionalLayoutMargins = m;
 		cell.selectionStyle = UITableViewCellSelectionStyleNone;
-	} else {
-		c = UIListContentConfiguration.cellConfiguration;
-		c.text = TTL(@"Check for Updates", @"업데이트 확인");
-		c.textProperties.color = self.view.tintColor;
 	}
 	cell.contentConfiguration = c;
 	return cell;
@@ -509,7 +649,16 @@ static NSString *TTString(id textOrBlock) {
 	else if (ip.section == 2) {
 		[NSUserDefaults.standardUserDefaults removeObjectForKey:kSeenBuild];
 		TTAlert(TTL(@"Onboarding reset", @"온보딩 상태를 재설정했어요"), TTL(@"Settings will open the next time TIDAL starts.", @"다음에 TIDAL을 열면 설정이 다시 떠요."), nil);
-	} else if (ip.section == 3 && ip.row == (NSInteger)gLoaded.count + 1) TTCheckUpdate(YES);
+	} else if (ip.section == 3 && ip.row == 1) TTCheckUpdate(YES);
+	else if (ip.section == 3 && ip.row == 2) {
+		_showTweaks = !_showTweaks;
+		NSMutableArray *rows = [NSMutableArray array];
+		for (NSUInteger i = 0; i < gLoaded.count; i++) [rows addObject:[NSIndexPath indexPathForRow:3 + i inSection:3]];
+		if (_showTweaks) [tv insertRowsAtIndexPaths:rows withRowAnimation:UITableViewRowAnimationFade];
+		else [tv deleteRowsAtIndexPaths:rows withRowAnimation:UITableViewRowAnimationFade];
+		UIView *chevron = [tv cellForRowAtIndexPath:ip].accessoryView;
+		[UIView animateWithDuration:0.25 animations:^{ chevron.transform = self->_showTweaks ? CGAffineTransformMakeRotation(M_PI_2) : CGAffineTransformIdentity; }];
+	}
 }
 @end
 
@@ -651,7 +800,8 @@ __attribute__((constructor)) static void TTInit(void) {
 	orig_viewWillAppear = (void *)method_setImplementation(m, (IMP)hook_viewWillAppear);
 
 	[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
-		TTCheckUpdate(NO);
+		static dispatch_once_t once;
+		dispatch_once(&once, ^{ TTCheckUpdate(NO); });
 	}];
 	TTHomePress *home = [TTHomePress new];
 	[NSNotificationCenter.defaultCenter addObserverForName:UIWindowDidBecomeKeyNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
