@@ -1,9 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
-#import <WebKit/WebKit.h>
-#import <CommonCrypto/CommonDigest.h>
-#import <Security/Security.h>
 #import <objc/runtime.h>
+#import <dlfcn.h>
 #import <os/log.h>
 #import <sqlite3.h>
 
@@ -18,7 +16,6 @@ static void OFLog(NSString *fmt, ...) {
 
 static NSString *const kHandled = @"tt.offline.handled";
 static NSString *const kV1 = @"tt.offline.v1";
-static NSString *const kScope = @"r_usr w_usr w_sub";
 static NSString *const kModePrefix = @"tt.offline.mode.";
 static NSString *const kNames = @"tt.offline.names";
 static NSString *const kKnown = @"tt.offline.files";
@@ -71,7 +68,14 @@ static void OFSetMode(NSString *key, BOOL v1) {
 	if (key) [NSUserDefaults.standardUserDefaults setBool:v1 forKey:[kModePrefix stringByAppendingString:key]];
 }
 
+static BOOL OFHasCore(void) {
+	static void *core;
+	if (!core) core = dlsym(RTLD_DEFAULT, "TTV1Token");
+	return core != NULL;
+}
+
 static BOOL OFUseV1(NSString *track) {
+	if (!OFHasCore()) return NO;
 	NSString *key;
 	@synchronized (gTrackCollection) { key = gTrackCollection[track]; }
 	id mode = OFMode(key ?: OFKey(@"tracks", track));
@@ -301,16 +305,38 @@ static NSData *OFManifest(NSString *track, NSData *data) {
 
 #pragma mark - Choice
 
+static UIWindow *OFAlertWindow(void) {
+	UIWindowScene *scene;
+	for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
+		if (s.activationState == UISceneActivationStateForegroundActive && [s isKindOfClass:UIWindowScene.class]) scene = (UIWindowScene *)s;
+	if (!scene) return nil;
+	UIWindow *w = [[UIWindow alloc] initWithWindowScene:scene];
+	w.windowLevel = UIWindowLevelAlert;
+	w.rootViewController = [UIViewController new];
+	w.hidden = NO;
+	return w;
+}
+
+static void OFNoCoreNotice(void) {
+	NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+	if ([d boolForKey:@"tt.offline.noCoreShown"]) return;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		UIWindow *w = OFAlertWindow();
+		if (!w) return;
+		[d setBool:YES forKey:@"tt.offline.noCoreShown"];
+		UIAlertController *ac = [UIAlertController alertControllerWithTitle:OFL(@"v1 downloads need TidalCore", @"v1 다운로드에는 TidalCore가 필요해요")
+		                                                            message:OFL(@"TidalCore holds the v1 login. Without it, downloads use TIDAL's own way (v2).",
+		                                                                        @"v1 로그인은 TidalCore에 있어요. 없으면 TIDAL 기본 방식(v2)으로 받아요.")
+		                                                     preferredStyle:UIAlertControllerStyleAlert];
+		[ac addAction:[UIAlertAction actionWithTitle:OFL(@"OK", @"확인") style:UIAlertActionStyleCancel handler:^(UIAlertAction *a) { w.hidden = YES; }]];
+		[w.rootViewController presentViewController:ac animated:YES completion:nil];
+	});
+}
+
 static void OFAsk(void (^go)(BOOL v1)) {
 	dispatch_async(dispatch_get_main_queue(), ^{
-		UIWindowScene *scene;
-		for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
-			if (s.activationState == UISceneActivationStateForegroundActive && [s isKindOfClass:UIWindowScene.class]) scene = (UIWindowScene *)s;
-		if (!scene) return go([NSUserDefaults.standardUserDefaults boolForKey:kV1]);
-		UIWindow *w = [[UIWindow alloc] initWithWindowScene:scene];
-		w.windowLevel = UIWindowLevelAlert;
-		w.rootViewController = [UIViewController new];
-		w.hidden = NO;
+		UIWindow *w = OFAlertWindow();
+		if (!w) return go([NSUserDefaults.standardUserDefaults boolForKey:kV1]);
 		UIAlertController *ac = [UIAlertController alertControllerWithTitle:OFL(@"Download from", @"다운로드 방식")
 		                                                            message:OFL(@"v1 gets the file itself, without DRM. v2 is TIDAL's own download.",
 		                                                                        @"v1은 DRM 없는 원본 파일을, v2는 TIDAL 기본 방식으로 받아요.")
@@ -327,183 +353,19 @@ static void OFAsk(void (^go)(BOOL v1)) {
 	});
 }
 
-#pragma mark - v1 login
-
-static NSString *const kRedirect = @"https://tidal.com/android/login/auth";
-
-static NSString *OFClient(BOOL secret) {
-	NSString *a = secret ? @"ZUdWMVVHMVpOMjVpY0ZvNVNVbGlURUZqVVQ=" : @"TmtKRVUxSmtjRXM=";
-	NSString *b = secret ? @"a3pjMmhyWVRGV1RtaGxWVUZ4VGpaSlkzTjZhbFJIT0QwPQ==" : @"NWFIRkZRbFJuVlE9PQ==";
-	NSMutableData *m = [[NSData alloc] initWithBase64EncodedString:a options:0].mutableCopy;
-	[m appendData:[[NSData alloc] initWithBase64EncodedString:b options:0]];
-	return [[NSString alloc] initWithData:[[NSData alloc] initWithBase64EncodedData:m options:0] encoding:NSUTF8StringEncoding];
-}
-
-static NSString *OFBase64URL(NSData *d) {
-	NSString *s = [d base64EncodedStringWithOptions:0];
-	s = [[s stringByReplacingOccurrencesOfString:@"+" withString:@"-"] stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
-	return [s stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"="]];
-}
-
-static void OFAuth(NSString *path, NSDictionary<NSString *, NSString *> *form, void (^done)(NSDictionary *json, NSInteger status)) {
-	NSCharacterSet *ok = [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"];
-	NSMutableArray *pairs = [NSMutableArray array];
-	[form enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSString *v, BOOL *stop) {
-		[pairs addObject:[NSString stringWithFormat:@"%@=%@", k, [v stringByAddingPercentEncodingWithAllowedCharacters:ok]]];
-	}];
-	NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[@"https://auth.tidal.com/v1/oauth2/" stringByAppendingString:path]]];
-	r.HTTPMethod = @"POST";
-	[r setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
-	r.HTTPBody = [[pairs componentsJoinedByString:@"&"] dataUsingEncoding:NSUTF8StringEncoding];
-	[[OFSession() dataTaskWithRequest:r completionHandler:^(NSData *d, NSURLResponse *resp, NSError *e) {
-		done(OFAs(d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil, NSDictionary.class), OFAs(resp, NSHTTPURLResponse.class) ? ((NSHTTPURLResponse *)resp).statusCode : 0);
-	}] resume];
-}
-
-static NSDictionary *OFKeychainItem(void) {
-	return @{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword, (__bridge id)kSecAttrService: @"tt.offline", (__bridge id)kSecAttrAccount: @"v1" };
-}
-
-static NSDictionary *OFTokens(void) {
-	NSMutableDictionary *q = [OFKeychainItem() mutableCopy];
-	q[(__bridge id)kSecReturnData] = @YES;
-	CFTypeRef data = NULL;
-	if (SecItemCopyMatching((__bridge CFDictionaryRef)q, &data) != errSecSuccess) return nil;
-	NSDictionary *t = OFAs([NSJSONSerialization JSONObjectWithData:CFBridgingRelease(data) options:0 error:nil], NSDictionary.class);
-	return [t[@"pkce"] boolValue] ? t : nil;
-}
-
-static void OFSaveTokens(NSDictionary *tokens) {
-	SecItemDelete((__bridge CFDictionaryRef)OFKeychainItem());
-	if (!tokens) return;
-	NSMutableDictionary *q = [OFKeychainItem() mutableCopy];
-	q[(__bridge id)kSecValueData] = [NSJSONSerialization dataWithJSONObject:tokens options:0 error:nil];
-	q[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlock;
-	OSStatus status = SecItemAdd((__bridge CFDictionaryRef)q, NULL);
-	if (status) OFLog(@"keychain save failed: %d", (int)status);
-}
-
-static NSDictionary *OFTokenRecord(NSDictionary *j, NSString *refresh) {
-	return @{ @"access": j[@"access_token"],
-	          @"refresh": OFAs(j[@"refresh_token"], NSString.class) ?: refresh ?: @"",
-	          @"expires": @(NSDate.date.timeIntervalSince1970 + [j[@"expires_in"] doubleValue]),
-	          @"user": [NSString stringWithFormat:@"%@", j[@"user_id"] ?: @""],
-	          @"pkce": @YES };
-}
+#pragma mark - v1 login (TidalCore)
 
 static void OFToken(void (^done)(NSString *token)) {
-	NSDictionary *t = OFTokens();
-	if (!t) return done(nil);
-	if ([t[@"expires"] doubleValue] > NSDate.date.timeIntervalSince1970 + 60) return done(t[@"access"]);
-	OFAuth(@"token", @{ @"grant_type": @"refresh_token", @"refresh_token": OFAs(t[@"refresh"], NSString.class) ?: @"", @"client_id": OFClient(NO), @"client_secret": OFClient(YES), @"scope": kScope },
-	       ^(NSDictionary *j, NSInteger status) {
-		       if (!OFAs(j[@"access_token"], NSString.class)) {
-			       OFLog(@"v1 login refresh failed (%ld %@)", (long)status, j[@"error"] ?: @"");
-			       return done(nil);
-		       }
-		       OFSaveTokens(OFTokenRecord(j, t[@"refresh"]));
-		       done(j[@"access_token"]);
-	       });
-}
-
-static UIViewController *OFTop(void) {
-	for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
-		for (UIWindow *w in ((UIWindowScene *)OFAs(scene, UIWindowScene.class)).windows) {
-			if (!w.isKeyWindow) continue;
-			UIViewController *vc = w.rootViewController;
-			while (vc.presentedViewController) vc = vc.presentedViewController;
-			return vc;
-		}
-	return nil;
-}
-
-static void OFLoginDone(UIViewController *vc, NSString *title, NSString *message) {
-	dispatch_async(dispatch_get_main_queue(), ^{
-		void (^show)(void) = ^{
-			UIAlertController *ac = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
-			[ac addAction:[UIAlertAction actionWithTitle:OFL(@"OK", @"확인") style:UIAlertActionStyleCancel handler:nil]];
-			[OFTop() presentViewController:ac animated:YES completion:nil];
-		};
-		if (vc.presentingViewController) [vc dismissViewControllerAnimated:YES completion:show];
-		else show();
-	});
-}
-
-@interface OFLoginPage : UIViewController <WKNavigationDelegate>
-@end
-
-@implementation OFLoginPage {
-	NSString *_verifier, *_key;
-	BOOL _done;
-}
-
-- (void)viewDidLoad {
-	[super viewDidLoad];
-	self.title = OFL(@"TIDAL Login", @"TIDAL 로그인");
-	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(close)];
-	uint8_t raw[32], hash[CC_SHA256_DIGEST_LENGTH];
-	arc4random_buf(raw, sizeof raw);
-	_verifier = OFBase64URL([NSData dataWithBytes:raw length:sizeof raw]);
-	NSData *v = [_verifier dataUsingEncoding:NSUTF8StringEncoding];
-	CC_SHA256(v.bytes, (CC_LONG)v.length, hash);
-	_key = [NSString stringWithFormat:@"%08x%08x", arc4random(), arc4random()];
-	NSURLComponents *c = [NSURLComponents componentsWithString:@"https://login.tidal.com/authorize"];
-	c.queryItems = @[
-		[NSURLQueryItem queryItemWithName:@"response_type" value:@"code"],
-		[NSURLQueryItem queryItemWithName:@"redirect_uri" value:kRedirect],
-		[NSURLQueryItem queryItemWithName:@"client_id" value:OFClient(NO)],
-		[NSURLQueryItem queryItemWithName:@"lang" value:@"EN"],
-		[NSURLQueryItem queryItemWithName:@"appMode" value:@"android"],
-		[NSURLQueryItem queryItemWithName:@"client_unique_key" value:_key],
-		[NSURLQueryItem queryItemWithName:@"code_challenge" value:OFBase64URL([NSData dataWithBytes:hash length:sizeof hash])],
-		[NSURLQueryItem queryItemWithName:@"code_challenge_method" value:@"S256"],
-		[NSURLQueryItem queryItemWithName:@"restrict_signup" value:@"true"],
-	];
-	WKWebView *web = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:[WKWebViewConfiguration new]];
-	web.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-	web.navigationDelegate = self;
-	[self.view addSubview:web];
-	[web loadRequest:[NSURLRequest requestWithURL:c.URL]];
-}
-
-- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
-
-- (void)webView:(WKWebView *)web decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decide {
-	NSURL *u = action.request.URL;
-	if (![u.absoluteString hasPrefix:kRedirect]) return decide(WKNavigationActionPolicyAllow);
-	decide(WKNavigationActionPolicyCancel);
-	if (_done) return;
-	_done = YES;
-	NSString *code;
-	for (NSURLQueryItem *q in [NSURLComponents componentsWithURL:u resolvingAgainstBaseURL:NO].queryItems)
-		if ([q.name isEqualToString:@"code"]) code = q.value;
-	UIViewController *nav = self.navigationController;
-	if (!code) return OFLoginDone(nav, OFL(@"Login failed", @"로그인에 실패했어요"), nil);
-	OFAuth(@"token",
-	       @{ @"code": code, @"client_id": OFClient(NO), @"grant_type": @"authorization_code", @"redirect_uri": kRedirect, @"scope": kScope, @"code_verifier": _verifier,
-	          @"client_unique_key": _key },
-	       ^(NSDictionary *j, NSInteger status) {
-		       if (!OFAs(j[@"access_token"], NSString.class)) {
-			       OFLog(@"v1 login failed (%ld %@)", (long)status, j[@"error"] ?: @"");
-			       return OFLoginDone(nav, OFL(@"Login failed", @"로그인에 실패했어요"), j[@"error_description"] ?: j[@"error"]);
-		       }
-		       OFSaveTokens(OFTokenRecord(j, nil));
-		       OFLog(@"v1 login ok");
-		       OFLoginDone(nav, OFL(@"Logged in", @"로그인했어요"), OFL(@"v1 downloads now use this login.", @"이제 v1 다운로드에 이 로그인을 써요."));
-	       });
-}
-@end
-
-static void OFLogin(void) {
-	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:[OFLoginPage new]];
-	[OFTop() presentViewController:nav animated:YES completion:nil];
+	void (*token)(void (^)(NSString *)) = dlsym(RTLD_DEFAULT, "TTV1Token");
+	token ? token(done) : done(nil);
 }
 
 @interface OFSettings : NSObject
 @end
 @implementation OFSettings
 + (NSArray *)ttSections {
-	BOOL (^loggedIn)(void) = ^BOOL { return OFTokens() != nil; };
+	NSString *(*v1User)(void) = dlsym(RTLD_DEFAULT, "TTV1User");
+	void (*v1Login)(void) = dlsym(RTLD_DEFAULT, "TTV1Login");
 	NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
 	NSDictionary *names = [d dictionaryForKey:kNames];
 	NSDictionary *kinds = @{ @"playlists": OFL(@"Playlist", @"플레이리스트"), @"albums": OFL(@"Album", @"앨범"), @"tracks": OFL(@"Track", @"트랙"),
@@ -526,12 +388,12 @@ static void OFLogin(void) {
 	NSDictionary *login = @{
 		@"header": OFL(@"v1 login", @"v1 로그인"),
 		@"items": @[
-			@{ @"type": @"action", @"title": OFL(@"Log In", @"로그인"), @"set": ^{ OFLogin(); }, @"visible": ^BOOL { return !loggedIn(); } },
-			@{ @"type": @"action", @"title": OFL(@"Log Out", @"로그아웃"), @"destructive": @YES, @"set": ^{ OFSaveTokens(nil); }, @"visible": loggedIn,
-			   @"value": ^NSString * { return OFTokens()[@"user"]; } },
+			@{ @"type": @"action", @"title": OFL(@"Log In", @"로그인"), @"set": ^{ v1Login(); }, @"visible": ^BOOL { return v1Login && v1User && !v1User(); } },
+			@{ @"type": @"action", @"title": OFL(@"Logged In", @"로그인됨"), @"enabled": ^BOOL { return NO; }, @"visible": ^BOOL { return v1User && v1User(); },
+			   @"value": ^NSString * { return v1User(); } },
 		],
-		@"footer": OFL(@"v1 asks playbackinfo with this login instead of TIDAL's. TIDAL's iOS login only gets FairPlay-encrypted streams; this one gets the file itself, up to Hi-Res. Without it, v1 falls back to v2.",
-		               @"v1이 TIDAL 앱 로그인 대신 이 로그인으로 playbackinfo를 요청해요. TIDAL iOS 로그인으로는 FairPlay로 암호화된 것만 와요. 이 로그인은 Hi-Res까지 원본 파일로 받아요. 로그인 안 하면 v1은 v2로 받아요."),
+		@"footer": OFL(@"v1 asks playbackinfo with this login instead of TIDAL's. TIDAL's iOS login only gets FairPlay-encrypted streams; this one gets the file itself, up to Hi-Res. Without it, v1 falls back to v2. Log out in Perigee's Settings > Advanced.",
+		               @"v1이 TIDAL 앱 로그인 대신 이 로그인으로 playbackinfo를 요청해요. TIDAL iOS 로그인으로는 FairPlay로 암호화된 것만 와요. 이 로그인은 Hi-Res까지 원본 파일로 받아요. 로그인 안 하면 v1은 v2로 받아요. 로그아웃은 Perigee 설정 > 고급에서 해요."),
 	};
 	return items.count ? @[ sources, login ] : @[ login ];
 }
@@ -576,7 +438,8 @@ static void OFLogin(void) {
 	req.HTTPBody = OFBody(self.request);
 	NSString *key = _key = OFInventoryKey(req.HTTPBody);
 	if (OFRemove(req)) OFSnapshot();
-	if (OFRemove(req) || OFMode(key)) return [self send:req];
+	if (!OFHasCore() && !OFRemove(req)) OFNoCoreNotice();
+	if (OFRemove(req) || OFMode(key) || !OFHasCore()) return [self send:req];
 	OFAsk(^(BOOL v1) {
 		OFSetMode(key, v1);
 		[self send:req];
