@@ -14,7 +14,9 @@ With v1, the `trackManifests?usage=DOWNLOAD` request gets an answer built from p
 
 TIDAL's own iOS login only gets FairPlay-encrypted HLS from playbackinfo, so v1 needs its own login: **Settings > Offline Download > v1 login** opens TIDAL's PKCE login in a web view inside the app (the only login that gets lossless and Hi-Res files), keeps the token in the keychain and refreshes it. Without it v1 uses TIDAL's login and ends up on v2.
 
-If playbackinfo fails or the file is encrypted, that track falls back to v2. The last choice applies to every download until the next one is picked.
+If playbackinfo fails or the file is encrypted, that track falls back to v2.
+
+When a download is removed, TIDAL forgets its songs but leaves their files in `Documents/TidalOffline` (v2 `.movpkg` too). Files TIDAL no longer knows about are deleted after a removal, after a download and on launch. The choice is kept per playlist, album or track: songs added to that playlist later download the same way without asking again. **Settings > Offline Download > Download source** lists the ones still downloaded and switches each between v1 and v2. Songs whose playlist isn't known yet use the last choice.
 
 ## Build
 

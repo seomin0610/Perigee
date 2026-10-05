@@ -5,6 +5,7 @@
 #import <Security/Security.h>
 #import <objc/runtime.h>
 #import <os/log.h>
+#import <sqlite3.h>
 
 static void OFLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
 static void OFLog(NSString *fmt, ...) {
@@ -18,6 +19,10 @@ static void OFLog(NSString *fmt, ...) {
 static NSString *const kHandled = @"tt.offline.handled";
 static NSString *const kV1 = @"tt.offline.v1";
 static NSString *const kScope = @"r_usr w_usr w_sub";
+static NSString *const kModePrefix = @"tt.offline.mode.";
+static NSString *const kNames = @"tt.offline.names";
+static NSString *const kKnown = @"tt.offline.files";
+static NSMutableDictionary<NSString *, NSString *> *gTrackCollection;
 static NSMutableDictionary<NSString *, NSArray<NSURL *> *> *gDirect;
 static char kJob;
 
@@ -34,8 +39,10 @@ static NSURLSession *OFSession(void) {
 	return s;
 }
 
-static BOOL OFInventoryAdd(NSURLRequest *r) {
-	return [r.HTTPMethod isEqualToString:@"POST"] && [r.URL.host hasSuffix:@"tidal.com"] && [r.URL.path hasSuffix:@"/relationships/offlineInventory"];
+static BOOL OFRemove(NSURLRequest *r) { return [r.HTTPMethod isEqualToString:@"DELETE"]; }
+
+static BOOL OFInventory(NSURLRequest *r) {
+	return ([r.HTTPMethod isEqualToString:@"POST"] || OFRemove(r)) && [r.URL.host hasSuffix:@"tidal.com"] && [r.URL.path hasSuffix:@"/relationships/offlineInventory"];
 }
 
 static NSString *OFManifestTrack(NSURLRequest *r) {
@@ -45,6 +52,144 @@ static NSString *OFManifestTrack(NSURLRequest *r) {
 		return nil;
 	NSString *track = u.lastPathComponent;
 	return track.length && [track rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location == NSNotFound ? track : nil;
+}
+
+static BOOL OFTasksRequest(NSURLRequest *r) {
+	return [r.HTTPMethod isEqualToString:@"GET"] && [r.URL.host hasSuffix:@"tidal.com"] && [r.URL.path hasSuffix:@"/offlineTasks"];
+}
+
+static NSString *OFKey(id type, id ident) {
+	NSString *t = OFAs(type, NSString.class), *i = OFAs(ident, NSString.class);
+	return t && i ? [NSString stringWithFormat:@"%@:%@", t, i] : nil;
+}
+
+static id OFMode(NSString *key) {
+	return key ? [NSUserDefaults.standardUserDefaults objectForKey:[kModePrefix stringByAppendingString:key]] : nil;
+}
+
+static void OFSetMode(NSString *key, BOOL v1) {
+	if (key) [NSUserDefaults.standardUserDefaults setBool:v1 forKey:[kModePrefix stringByAppendingString:key]];
+}
+
+static BOOL OFUseV1(NSString *track) {
+	NSString *key;
+	@synchronized (gTrackCollection) { key = gTrackCollection[track]; }
+	id mode = OFMode(key ?: OFKey(@"tracks", track));
+	return mode ? [mode boolValue] : [NSUserDefaults.standardUserDefaults boolForKey:kV1];
+}
+
+static NSString *OFInventoryKey(NSData *body) {
+	NSDictionary *doc = OFAs(body ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : nil, NSDictionary.class);
+	NSDictionary *item = OFAs([OFAs(doc[@"data"], NSArray.class) firstObject], NSDictionary.class);
+	return OFKey(item[@"type"], item[@"id"]);
+}
+
+static sqlite3 *OFOpenStore(int flags) {
+	NSURL *db = [[NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:@"Offliner/offline.sqlite"];
+	sqlite3 *h;
+	if (sqlite3_open_v2(db.path.fileSystemRepresentation, &h, flags, NULL) == SQLITE_OK) {
+		sqlite3_busy_timeout(h, 2000);
+		return h;
+	}
+	sqlite3_close(h);
+	return NULL;
+}
+
+static BOOL OFStored(sqlite3 *h, NSString *key, UIImage **art) {
+	NSRange colon = [key rangeOfString:@":"];
+	sqlite3_stmt *st;
+	*art = nil;
+	if (!h || colon.location == NSNotFound || sqlite3_prepare_v2(h, "SELECT artwork_bookmark FROM offline_item WHERE resource_type = ? AND resource_id = ?", -1, &st, NULL) != SQLITE_OK) return YES;
+	NSString *type = [key substringToIndex:colon.location];
+	sqlite3_bind_text(st, 1, type.UTF8String, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(st, 2, [type isEqualToString:@"userCollectionTracks"] ? "me" : [key substringFromIndex:NSMaxRange(colon)].UTF8String, -1, SQLITE_TRANSIENT);
+	BOOL found = sqlite3_step(st) == SQLITE_ROW;
+	NSData *bookmark = found && sqlite3_column_type(st, 0) == SQLITE_BLOB ? [NSData dataWithBytes:sqlite3_column_blob(st, 0) length:sqlite3_column_bytes(st, 0)] : nil;
+	sqlite3_finalize(st);
+	NSURL *file = bookmark ? [NSURL URLByResolvingBookmarkData:bookmark options:0 relativeToURL:nil bookmarkDataIsStale:NULL error:nil] : nil;
+	if (file) *art = [[UIImage imageWithContentsOfFile:file.path] imageByPreparingThumbnailOfSize:CGSizeMake(120, 120)];
+	return found;
+}
+
+static NSString *OFFolder(void) {
+	return [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"TidalOffline"];
+}
+
+static NSSet<NSString *> *OFStoreFiles(void) {
+	sqlite3 *h = OFOpenStore(SQLITE_OPEN_READONLY);
+	sqlite3_stmt *st;
+	if (!h || sqlite3_prepare_v2(h, "SELECT media_bookmark FROM offline_item WHERE media_bookmark IS NOT NULL", -1, &st, NULL) != SQLITE_OK) {
+		sqlite3_close(h);
+		return nil;
+	}
+	NSMutableSet *files = [NSMutableSet set];
+	int rc;
+	while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+		NSData *b = [NSData dataWithBytes:sqlite3_column_blob(st, 0) length:sqlite3_column_bytes(st, 0)];
+		NSString *name = [[NSURL resourceValuesForKeys:@[ NSURLPathKey ] fromBookmarkData:b][NSURLPathKey] lastPathComponent];
+		if (name) [files addObject:name];
+	}
+	sqlite3_finalize(st);
+	sqlite3_close(h);
+	return rc == SQLITE_DONE ? files : nil;
+}
+
+static void OFSnapshot(void) {
+	@synchronized (kKnown) {
+		NSSet *live = OFStoreFiles();
+		NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+		if (live) [d setObject:[live setByAddingObjectsFromArray:[d stringArrayForKey:kKnown] ?: @[]].allObjects forKey:kKnown];
+	}
+}
+
+static void OFCleanup(void) {
+	@synchronized (kKnown) {
+		NSSet *live = OFStoreFiles();
+		if (!live) return OFLog(@"cleanup: can't read store");
+		NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+		NSUInteger gone = 0, removed = 0;
+		for (NSString *f in [d stringArrayForKey:kKnown])
+			if (![live containsObject:f]) {
+				gone++;
+				removed += [NSFileManager.defaultManager removeItemAtPath:[OFFolder() stringByAppendingPathComponent:f] error:nil];
+			}
+		[d setObject:live.allObjects forKey:kKnown];
+		OFLog(@"cleanup: removed %lu of %lu, store %lu, folder %lu", (unsigned long)removed, (unsigned long)gone, (unsigned long)live.count,
+		      (unsigned long)[NSFileManager.defaultManager contentsOfDirectoryAtPath:OFFolder() error:nil].count);
+	}
+}
+
+static void OFCleanupSoon(void) {
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ OFCleanup(); });
+}
+
+static void OFLearnTasks(NSData *data) {
+	OFSnapshot();
+	NSDictionary *doc = OFAs(data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil, NSDictionary.class);
+	NSMutableDictionary *seen = [NSMutableDictionary dictionary];
+	for (NSDictionary *inc in OFAs(doc[@"included"], NSArray.class)) {
+		NSDictionary *a = OFAs(OFAs(inc, NSDictionary.class)[@"attributes"], NSDictionary.class);
+		NSString *key = OFKey(inc[@"type"], inc[@"id"]), *name = OFAs(a[@"name"], NSString.class) ?: OFAs(a[@"title"], NSString.class);
+		if (key && name) seen[key] = name;
+	}
+	NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+	NSMutableDictionary *names = [[d dictionaryForKey:kNames] mutableCopy] ?: [NSMutableDictionary dictionary];
+	for (NSDictionary *task in OFAs(doc[@"data"], NSArray.class)) {
+		NSDictionary *rel = OFAs(OFAs(task, NSDictionary.class)[@"relationships"], NSDictionary.class);
+		NSDictionary *item = OFAs(OFAs(rel[@"item"], NSDictionary.class)[@"data"], NSDictionary.class);
+		NSDictionary *coll = OFAs(OFAs(rel[@"collection"], NSDictionary.class)[@"data"], NSDictionary.class);
+		if ([OFAs(OFAs(task, NSDictionary.class)[@"attributes"], NSDictionary.class)[@"action"] isEqual:@"REMOVE"]) {
+			OFCleanupSoon();
+			continue;
+		}
+		NSString *track = [item[@"type"] isEqual:@"tracks"] ? OFAs(item[@"id"], NSString.class) : nil;
+		if (!track) continue;
+		NSString *key = OFKey(coll[@"type"], coll[@"id"]) ?: OFKey(@"tracks", track);
+		@synchronized (gTrackCollection) { gTrackCollection[track] = key; }
+		if (!OFMode(key)) OFSetMode(key, [d boolForKey:kV1]);
+		if (seen[key]) names[key] = seen[key];
+	}
+	[d setObject:names forKey:kNames];
 }
 
 static NSString *OFQuality(NSURL *u) {
@@ -156,12 +301,12 @@ static NSData *OFManifest(NSString *track, NSData *data) {
 
 #pragma mark - Choice
 
-static void OFAsk(void (^go)(void)) {
+static void OFAsk(void (^go)(BOOL v1)) {
 	dispatch_async(dispatch_get_main_queue(), ^{
 		UIWindowScene *scene;
 		for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
 			if (s.activationState == UISceneActivationStateForegroundActive && [s isKindOfClass:UIWindowScene.class]) scene = (UIWindowScene *)s;
-		if (!scene) return go();
+		if (!scene) return go([NSUserDefaults.standardUserDefaults boolForKey:kV1]);
 		UIWindow *w = [[UIWindow alloc] initWithWindowScene:scene];
 		w.windowLevel = UIWindowLevelAlert;
 		w.rootViewController = [UIViewController new];
@@ -176,7 +321,7 @@ static void OFAsk(void (^go)(void)) {
 			                                     handler:^(UIAlertAction *a) {
 				                                     w.hidden = YES;
 				                                     [NSUserDefaults.standardUserDefaults setBool:v1.boolValue forKey:kV1];
-				                                     go();
+				                                     go(v1.boolValue);
 			                                     }]];
 		[w.rootViewController presentViewController:ac animated:YES completion:nil];
 	});
@@ -359,7 +504,26 @@ static void OFLogin(void) {
 @implementation OFSettings
 + (NSArray *)ttSections {
 	BOOL (^loggedIn)(void) = ^BOOL { return OFTokens() != nil; };
-	return @[ @{
+	NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+	NSDictionary *names = [d dictionaryForKey:kNames];
+	NSDictionary *kinds = @{ @"playlists": OFL(@"Playlist", @"플레이리스트"), @"albums": OFL(@"Album", @"앨범"), @"tracks": OFL(@"Track", @"트랙"),
+		                     @"userCollectionTracks": OFL(@"My Collection", @"내 컬렉션") };
+	NSMutableArray *items = [NSMutableArray array];
+	sqlite3 *store = OFOpenStore(SQLITE_OPEN_READONLY);
+	for (NSString *full in d.dictionaryRepresentation.allKeys) {
+		if (![full hasPrefix:kModePrefix]) continue;
+		NSString *key = [full substringFromIndex:kModePrefix.length], *kind = kinds[[key componentsSeparatedByString:@":"].firstObject];
+		UIImage *art;
+		if (!OFStored(store, key, &art)) continue;
+		[items addObject:@{ @"type": @"choice", @"key": full, @"default": @NO, @"title": names[key] ?: kind ?: key, @"detail": kind ?: key,
+			                @"image": art ?: [UIImage systemImageNamed:@"music.note.list"], @"options": @[ @[ @YES, @"v1" ], @[ @NO, @"v2" ] ] }];
+	}
+	sqlite3_close(store);
+	[items sortUsingDescriptors:@[ [NSSortDescriptor sortDescriptorWithKey:@"title" ascending:YES selector:@selector(localizedStandardCompare:)] ]];
+	NSDictionary *sources = @{ @"header": OFL(@"Download source", @"다운로드 방식"), @"items": items,
+		                       @"footer": OFL(@"Each download asks once; songs added to it later use the same choice. Applies to songs downloaded from now on.",
+		                                      @"다운로드마다 한 번만 물어보고, 나중에 추가되는 곡도 같은 방식으로 받아요. 바꾸면 그다음 받는 곡부터 적용돼요.") };
+	NSDictionary *login = @{
 		@"header": OFL(@"v1 login", @"v1 로그인"),
 		@"items": @[
 			@{ @"type": @"action", @"title": OFL(@"Log In", @"로그인"), @"set": ^{ OFLogin(); }, @"visible": ^BOOL { return !loggedIn(); } },
@@ -368,7 +532,8 @@ static void OFLogin(void) {
 		],
 		@"footer": OFL(@"v1 asks playbackinfo with this login instead of TIDAL's. TIDAL's iOS login only gets FairPlay-encrypted streams; this one gets the file itself, up to Hi-Res. Without it, v1 falls back to v2.",
 		               @"v1이 TIDAL 앱 로그인 대신 이 로그인으로 playbackinfo를 요청해요. TIDAL iOS 로그인으로는 FairPlay로 암호화된 것만 와요. 이 로그인은 Hi-Res까지 원본 파일로 받아요. 로그인 안 하면 v1은 v2로 받아요."),
-	} ];
+	};
+	return items.count ? @[ sources, login ] : @[ login ];
 }
 @end
 
@@ -382,11 +547,13 @@ static void OFLogin(void) {
 	NSURLSessionDataTask *_task;
 	id _runLoop;
 	NSArray *_modes;
+	NSString *_key;
 }
 
 + (BOOL)canInitWithRequest:(NSURLRequest *)r {
 	if ([NSURLProtocol propertyForKey:kHandled inRequest:r]) return NO;
-	return OFInventoryAdd(r) || (OFManifestTrack(r) && [NSUserDefaults.standardUserDefaults boolForKey:kV1]);
+	NSString *track = OFManifestTrack(r);
+	return OFInventory(r) || OFTasksRequest(r) || (track && OFUseV1(track));
 }
 
 + (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)r { return r; }
@@ -405,8 +572,15 @@ static void OFLogin(void) {
 	[NSURLProtocol setProperty:@YES forKey:kHandled inRequest:req];
 	NSString *track = OFManifestTrack(req);
 	if (track) return [self v1:track original:req];
+	if (OFTasksRequest(req)) return [self send:req];
 	req.HTTPBody = OFBody(self.request);
-	OFAsk(^{ [self send:req]; });
+	NSString *key = _key = OFInventoryKey(req.HTTPBody);
+	if (OFRemove(req)) OFSnapshot();
+	if (OFRemove(req) || OFMode(key)) return [self send:req];
+	OFAsk(^(BOOL v1) {
+		OFSetMode(key, v1);
+		[self send:req];
+	});
 }
 
 - (void)send:(NSURLRequest *)req {
@@ -438,6 +612,18 @@ static void OFLogin(void) {
 
 - (void)reply:(NSData *)body response:(NSURLResponse *)response error:(NSError *)error {
 	NSHTTPURLResponse *http = OFAs(response, NSHTTPURLResponse.class);
+	if (http.statusCode == 200 && OFTasksRequest(self.request)) OFLearnTasks(body);
+	if (OFRemove(self.request)) {
+		OFLog(@"remove %@: %ld", _key, (long)http.statusCode);
+		if (http.statusCode / 100 == 2) {
+			NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+			NSMutableDictionary *names = [[d dictionaryForKey:kNames] mutableCopy];
+			if (_key) [names removeObjectForKey:_key];
+			if (names) [d setObject:names forKey:kNames];
+			if (_key) [d removeObjectForKey:[kModePrefix stringByAppendingString:_key]];
+			OFCleanupSoon();
+		}
+	}
 	if (http) {
 		NSMutableDictionary *headers = [NSMutableDictionary dictionary];
 		[http.allHeaderFields enumerateKeysAndObjectsUsingBlock:^(NSString *k, id v, BOOL *stop) {
@@ -507,6 +693,7 @@ static void OFDownload(AVAssetDownloadTask *t) {
 	void (^finish)(NSError *) = ^(NSError *err) {
 		if (err) [NSFileManager.defaultManager removeItemAtURL:dest error:nil];
 		OFLog(@"direct download %@ (%lu parts): %@", t.taskDescription, (unsigned long)parts.count, err ?: dest.lastPathComponent);
+		if (!err) OFCleanupSoon();
 		[q addOperationWithBlock:^{
 			if (!err && [d respondsToSelector:@selector(URLSession:assetDownloadTask:didFinishDownloadingToURL:)]) [d URLSession:s assetDownloadTask:t didFinishDownloadingToURL:dest];
 			if ([d respondsToSelector:@selector(URLSession:task:didCompleteWithError:)]) [d URLSession:s task:t didCompleteWithError:err];
@@ -578,6 +765,8 @@ static AVAssetDownloadTask *hook_baseMakeTask(id self, SEL _cmd, AVURLAsset *ass
 __attribute__((constructor)) static void OFInit(void) {
 	if (NSClassFromString(@"TTCore") && ![NSUserDefaults.standardUserDefaults boolForKey:@"tt.TidalOffline.enabled"]) { OFLog(@"turned off in TidalCore's settings"); return; }
 	gDirect = [NSMutableDictionary dictionary];
+	gTrackCollection = [NSMutableDictionary dictionary];
+	OFCleanupSoon();
 	[NSURLProtocol registerClass:OFProtocol.class];
 	Class cfg = object_getClass(NSURLSessionConfiguration.defaultSessionConfiguration);
 	Method m = class_getInstanceMethod(cfg, @selector(protocolClasses));
