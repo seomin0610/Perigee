@@ -1,6 +1,5 @@
 #import "KS.h"
 #import <objc/runtime.h>
-#import <dlfcn.h>
 
 static const double kKSBudget = 8;
 static const int64_t kKSSettleMs = 300;
@@ -8,13 +7,9 @@ static const int64_t kKSSettleMs = 300;
 void KSLog(NSString *fmt, ...) {
 	va_list args;
 	va_start(args, fmt);
-	NSString *line = [@"[TidalKoreanSearch] " stringByAppendingString:[[NSString alloc] initWithFormat:fmt arguments:args]];
+	NSString *line = [[NSString alloc] initWithFormat:fmt arguments:args];
 	va_end(args);
-	static void (*radiant)(NSString *);
-	static dispatch_once_t once;
-	dispatch_once(&once, ^{ radiant = (void (*)(NSString *))dlsym(RTLD_DEFAULT, "RLLogLine"); });
-	if (radiant) radiant(line);
-	else NSLog(@"%@", line);
+	NSLog(@"[TidalKoreanSearch] %@", line);
 }
 
 static NSURLSession *KSSession(void) {
