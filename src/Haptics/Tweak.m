@@ -611,7 +611,7 @@ static NSString *HTAppleStatus(void) {
 static NSString *HTOwnStatus(void) {
 	NSString *(*user)(void) = dlsym(RTLD_DEFAULT, "TTV1User");
 	if (!CHHapticEngine.capabilitiesForHardware.supportsHaptics) return HTL(@"This iPhone can't play haptics.", @"이 iPhone은 햅틱을 지원하지 않아요.");
-	if (!user || !user()) return HTL(@"Needs the v1 login to get the song's audio.", @"곡 오디오를 받으려면 v1 로그인이 필요해요.");
+	if (!user || !user()) return HTL(@"Needs the secondary login to get the song's audio.", @"곡 오디오를 받으려면 보조 로그인이 필요해요.");
 	if (!HTOn()) return nil;
 	NSString *track = HTMatch(gInfo)[2];
 	NSString *now = !gInfo ? HTL(@"Nothing playing", @"재생 중인 곡 없음")
@@ -691,7 +691,7 @@ static void HTAddSettingsEntry(UIViewController *vc) {
 		   @"options": @[ @[ @0, HTL(@"Everything", @"전부") ], @[ @1, HTL(@"Beat", @"비트") ], @[ @2, HTL(@"Bass", @"베이스") ] ] },
 		@{ @"type": @"choice", @"key": kStrengthKey, @"default": @1, @"title": HTL(@"Strength", @"세기"), @"visible": own,
 		   @"options": @[ @[ @0.5, @"50%" ], @[ @1, @"100%" ], @[ @1.5, @"150%" ], @[ @2, @"200%" ] ] },
-		@{ @"type": @"action", @"title": HTL(@"Log In to v1", @"v1 로그인"), @"set": ^{ if (login) login(); },
+		@{ @"type": @"action", @"title": HTL(@"Secondary Login", @"보조 로그인"), @"set": ^{ if (login) login(); },
 		   @"visible": ^BOOL { return own() && login && user && !user(); } },
 	],
 	             @"footer": ^NSString * { return HTStatus(); } } ];

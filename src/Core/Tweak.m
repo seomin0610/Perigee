@@ -461,6 +461,7 @@ static NSString *TTString(id textOrBlock) {
 
 // Colours pinned: in an iOS 26 sheet grouped-table cells sometimes come up the same colour as the sheet
 @interface TTGroupedTable : UITableViewController
+- (void)refreshInPlace;
 @end
 @implementation TTGroupedTable
 - (void)viewDidLoad {
@@ -487,6 +488,37 @@ static NSString *TTString(id textOrBlock) {
 }
 - (UIView *)tableView:(UITableView *)tv viewForFooterInSection:(NSInteger)s {
 	return [self headerFooter:tv text:[self respondsToSelector:@selector(tableView:titleForFooterInSection:)] ? [(id<UITableViewDataSource>)self tableView:tv titleForFooterInSection:s] : nil footer:YES];
+}
+// reloadData swaps every cell and cuts running switch/menu/highlight animations, so update the visible ones in place
+- (void)refreshInPlace {
+	UITableView *tv = self.tableView;
+	for (NSIndexPath *ip in tv.indexPathsForVisibleRows) {
+		UITableViewCell *cell = [tv cellForRowAtIndexPath:ip], *fresh = [self tableView:tv cellForRowAtIndexPath:ip];
+		cell.contentConfiguration = fresh.contentConfiguration;
+		cell.accessoryType = fresh.accessoryType;
+		cell.selectionStyle = fresh.selectionStyle;
+		UIView *a = cell.accessoryView, *b = fresh.accessoryView;
+		if ([a isKindOfClass:UISwitch.class] && [b isKindOfClass:UISwitch.class]) {
+			UISwitch *sa = (UISwitch *)a, *sb = (UISwitch *)b;
+			if (sa.on != sb.on) [sa setOn:sb.on animated:YES];
+			sa.enabled = sb.enabled;
+		} else if ([a isKindOfClass:UIButton.class] && [b isKindOfClass:UIButton.class]) {
+			UIButton *ba = (UIButton *)a;
+			ba.menu = ((UIButton *)b).menu;
+			ba.enabled = ((UIButton *)b).enabled;
+			[ba sizeToFit];
+		} else if (a.class != b.class) cell.accessoryView = b;
+	}
+	if ([self respondsToSelector:@selector(tableView:titleForFooterInSection:)])
+		for (NSInteger s = 0; s < tv.numberOfSections; s++) {
+			UITableViewHeaderFooterView *f = [tv footerViewForSection:s];
+			NSString *text = [(id<UITableViewDataSource>)self tableView:tv titleForFooterInSection:s];
+			if (!f || !text) continue;
+			UIListContentConfiguration *c = [(UIListContentConfiguration *)f.contentConfiguration copy];
+			c.text = text;
+			f.contentConfiguration = c;
+		}
+	[tv performBatchUpdates:nil completion:nil];
 }
 @end
 
@@ -538,8 +570,28 @@ static NSString *TTString(id textOrBlock) {
 			m[@"items"] = items;
 			[sections addObject:m];
 		}
+	NSArray<NSDictionary *> *old = _sections;
 	_sections = sections;
-	[self.tableView reloadData];
+	UITableView *tv = self.tableView;
+	if (old.count != sections.count) {
+		[tv reloadData];
+		return;
+	}
+	NSArray *(^ids)(NSDictionary *) = ^NSArray *(NSDictionary *s) {
+		NSMutableArray *a = [NSMutableArray array];
+		for (NSDictionary *i in s[@"items"]) [a addObject:i[@"key"] ?: i[@"title"] ?: NSNull.null];
+		return a;
+	};
+	[tv performBatchUpdates:^{
+		for (NSUInteger s = 0; s < sections.count; s++) {
+			NSOrderedCollectionDifference *d = [ids(sections[s]) differenceFromArray:ids(old[s])];
+			for (NSOrderedCollectionChange *c in d.removals)
+				[tv deleteRowsAtIndexPaths:@[ [NSIndexPath indexPathForRow:c.index inSection:s] ] withRowAnimation:UITableViewRowAnimationFade];
+			for (NSOrderedCollectionChange *c in d.insertions)
+				[tv insertRowsAtIndexPaths:@[ [NSIndexPath indexPathForRow:c.index inSection:s] ] withRowAnimation:UITableViewRowAnimationFade];
+		}
+	} completion:nil];
+	[self refreshInPlace];
 }
 
 - (void)refreshSoon {
@@ -591,8 +643,7 @@ static NSString *TTString(id textOrBlock) {
 			if (!confirm || !s.on) {
 				TTWrite(item, @(s.on));
 				if (item[@"restart"] && s.on != [item[@"restart"] boolValue]) TTAskRestart();
-				// rebuilding now replaces the switch mid-slide and kills its iOS 26 animation
-				dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [ws refreshSoon]; });
+				[ws refreshSoon];
 				return;
 			}
 			UIAlertController *ac = [UIAlertController alertControllerWithTitle:confirm[0] message:confirm[1] preferredStyle:UIAlertControllerStyleAlert];
@@ -616,6 +667,7 @@ static NSString *TTString(id textOrBlock) {
 				[ws refreshSoon];
 			}];
 			a.state = [o[0] isEqual:current] ? UIMenuElementStateOn : UIMenuElementStateOff;
+			if (o.count > 2) a.subtitle = o[2];
 			[actions addObject:a];
 		}
 		UIButtonConfiguration *bc = UIButtonConfiguration.plainButtonConfiguration;
@@ -696,7 +748,7 @@ static NSString *TTString(id textOrBlock) {
 	[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(updateChanged:) name:@"TTV1Changed" object:nil];
 }
 
-- (void)updateChanged:(NSNotification *)n { [self.tableView reloadData]; }
+- (void)updateChanged:(NSNotification *)n { [self refreshInPlace]; }
 
 - (void)viewWillAppear:(BOOL)animated {
 	[super viewWillAppear:animated];
@@ -737,10 +789,9 @@ static NSString *TTString(id textOrBlock) {
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 4; }
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 3 ? 3 + (_showTweaks ? gLoaded.count : 0) : s == 2 ? 3 : 1; }
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 2 ? TTL(@"Advanced", @"고급") : s == 3 ? TTL(@"About Perigee", @"Perigee 정보") : nil; }
+
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
-	return s == 2 ? TTL(@"v1 login: Offline Download (v1) and Music Haptics (song analysis) get the song's audio with it, without DRM.",
-	                    @"v1 로그인: 오프라인 다운로드(v1)와 음악 햅틱(곡 분석)이 이 로그인으로 DRM 없는 곡 오디오를 받아요.")
-	              : nil;
+	return s == 2 ? TTL(@"Used to get audio without HLS FairPlay or DRM.", @"HLS FairPlay 및 DRM이 걸려있지 않은 음원을 받을 때 사용합니다.") : nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -777,7 +828,7 @@ static NSString *TTString(id textOrBlock) {
 	} else if (ip.section == 2 && ip.row == 2) {
 		NSString *user = TTV1User();
 		c = UIListContentConfiguration.valueCellConfiguration;
-		c.text = user ? TTL(@"Log Out of v1", @"v1 로그아웃") : TTL(@"v1 Login", @"v1 로그인");
+		c.text = user ? TTL(@"Log Out of Secondary Login", @"보조 로그아웃") : TTL(@"Secondary Login", @"보조 로그인");
 		c.secondaryText = user;
 		c.textProperties.color = user ? UIColor.systemRedColor : self.view.tintColor;
 	} else if (ip.section == 2) {

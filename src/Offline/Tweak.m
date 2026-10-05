@@ -325,8 +325,8 @@ static void OFNoCoreNotice(void) {
 		if (!w) return;
 		[d setBool:YES forKey:@"tt.offline.noCoreShown"];
 		UIAlertController *ac = [UIAlertController alertControllerWithTitle:OFL(@"v1 downloads need TidalCore", @"v1 다운로드에는 TidalCore가 필요해요")
-		                                                            message:OFL(@"TidalCore holds the v1 login. Without it, downloads use TIDAL's own way (v2).",
-		                                                                        @"v1 로그인은 TidalCore에 있어요. 없으면 TIDAL 기본 방식(v2)으로 받아요.")
+		                                                            message:OFL(@"TidalCore holds the secondary login. Without it, downloads use TIDAL's own way (v2).",
+		                                                                        @"보조 로그인은 TidalCore에 있어요. 없으면 TIDAL 기본 방식(v2)으로 받아요.")
 		                                                     preferredStyle:UIAlertControllerStyleAlert];
 		[ac addAction:[UIAlertAction actionWithTitle:OFL(@"OK", @"확인") style:UIAlertActionStyleCancel handler:^(UIAlertAction *a) { w.hidden = YES; }]];
 		[w.rootViewController presentViewController:ac animated:YES completion:nil];
@@ -338,8 +338,8 @@ static void OFAsk(void (^go)(BOOL v1)) {
 		UIWindow *w = OFAlertWindow();
 		if (!w) return go([NSUserDefaults.standardUserDefaults boolForKey:kV1]);
 		UIAlertController *ac = [UIAlertController alertControllerWithTitle:OFL(@"Download from", @"다운로드 방식")
-		                                                            message:OFL(@"v1 gets the file itself, without DRM. v2 is TIDAL's own download.",
-		                                                                        @"v1은 DRM 없는 원본 파일을, v2는 TIDAL 기본 방식으로 받아요.")
+		                                                            message:OFL(@"v1 gets the file itself, without DRM (needs the secondary login). v2 is TIDAL's own download.",
+		                                                                        @"v1은 DRM 없는 원본 파일을, v2는 TIDAL 기본 방식으로 받아요. v1은 보조 로그인이 필요합니다.")
 		                                                     preferredStyle:UIAlertControllerStyleAlert];
 		for (NSNumber *v1 in @[ @YES, @NO ])
 			[ac addAction:[UIAlertAction actionWithTitle:v1.boolValue ? @"v1 (playbackinfo)" : @"v2 (trackManifests)"
@@ -378,7 +378,7 @@ static void OFToken(void (^done)(NSString *token)) {
 		UIImage *art;
 		if (!OFStored(store, key, &art)) continue;
 		[items addObject:@{ @"type": @"choice", @"key": full, @"default": @NO, @"title": names[key] ?: kind ?: key, @"detail": kind ?: key,
-			                @"image": art ?: [UIImage systemImageNamed:@"music.note.list"], @"options": @[ @[ @YES, @"v1" ], @[ @NO, @"v2" ] ] }];
+			                @"image": art ?: [UIImage systemImageNamed:@"music.note.list"], @"options": @[ @[ @YES, @"v1", OFL(@"Needs the secondary login", @"보조 로그인이 필요합니다") ], @[ @NO, @"v2" ] ] }];
 	}
 	sqlite3_close(store);
 	[items sortUsingDescriptors:@[ [NSSortDescriptor sortDescriptorWithKey:@"title" ascending:YES selector:@selector(localizedStandardCompare:)] ]];
@@ -386,7 +386,7 @@ static void OFToken(void (^done)(NSString *token)) {
 		                       @"footer": OFL(@"Each download asks once; songs added to it later use the same choice. Applies to songs downloaded from now on.",
 		                                      @"다운로드마다 한 번만 물어보고, 나중에 추가되는 곡도 같은 방식으로 받아요. 바꾸면 그다음 받는 곡부터 적용돼요.") };
 	NSDictionary *login = @{
-		@"header": OFL(@"v1 login", @"v1 로그인"),
+		@"header": OFL(@"Secondary login", @"보조 로그인"),
 		@"items": @[
 			@{ @"type": @"action", @"title": OFL(@"Log In", @"로그인"), @"set": ^{ v1Login(); }, @"visible": ^BOOL { return v1Login && v1User && !v1User(); } },
 			@{ @"type": @"action", @"title": OFL(@"Logged In", @"로그인됨"), @"enabled": ^BOOL { return NO; }, @"visible": ^BOOL { return v1User && v1User(); },
