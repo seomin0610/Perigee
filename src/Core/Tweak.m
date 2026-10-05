@@ -1,11 +1,22 @@
 #import <UIKit/UIKit.h>
+#import <WebKit/WebKit.h>
+#import <CommonCrypto/CommonDigest.h>
+#import <Security/Security.h>
 #import <objc/runtime.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <dlfcn.h>
 #import <OSLog/OSLog.h>
+#import <os/log.h>
 
-#define TTLog(fmt, ...) NSLog(@"[TidalCore] " fmt, ##__VA_ARGS__)
+static void TTLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
+static void TTLog(NSString *fmt, ...) {
+	va_list args;
+	va_start(args, fmt);
+	NSString *line = [[NSString alloc] initWithFormat:fmt arguments:args];
+	va_end(args);
+	os_log(OS_LOG_DEFAULT, "[TidalCore] %{public}@", line);
+}
 
 #ifndef TT_BUILD
 #define TT_BUILD @"dev"
@@ -26,7 +37,7 @@ static NSArray<NSArray *> *TTTweaks(void) {
 		@[ @"TidalMeanings", @"Lyrics Meanings", @"가사 해설", @"MTSettings", @"quote.bubble", @YES,
 		   @"Genius annotations for lyric lines", @"가사 줄별 Genius 해설", @NO ],
 		@[ @"TidalHaptics", @"Music Haptics", @"음악 햅틱", @"HTSettings", @"iphone.radiowaves.left.and.right", @YES,
-		   @"Apple's haptic tracks while you listen", @"듣는 곡에 맞춘 Apple 햅틱", @NO ],
+		   @"Taps along with the song", @"곡에 맞춰 울리는 햅틱", @NO ],
 		@[ @"TidalKoreanSearch", @"Korean Search", @"한글 검색", @"KSSettings", @"magnifyingglass", @YES,
 		   @"Find songs by their Korean names", @"한글 이름으로 곡 찾기", @NO ],
 		@[ @"TidalLiquidTab", @"Liquid Glass Tab Bar", @"리퀴드 글래스 탭 바", @"", @"dock.rectangle", @YES,
@@ -261,6 +272,172 @@ static void TTCheckUpdate(BOOL manual) {
 	}] resume];
 }
 
+#pragma mark - v1 login
+
+static NSString *const kV1Scope = @"r_usr w_usr w_sub";
+static NSString *const kV1Redirect = @"https://tidal.com/android/login/auth";
+
+static NSString *TTV1Client(BOOL secret) {
+	NSString *a = secret ? @"ZUdWMVVHMVpOMjVpY0ZvNVNVbGlURUZqVVQ=" : @"TmtKRVUxSmtjRXM=";
+	NSString *b = secret ? @"a3pjMmhyWVRGV1RtaGxWVUZ4VGpaSlkzTjZhbFJIT0QwPQ==" : @"NWFIRkZRbFJuVlE9PQ==";
+	NSMutableData *m = [[NSData alloc] initWithBase64EncodedString:a options:0].mutableCopy;
+	[m appendData:[[NSData alloc] initWithBase64EncodedString:b options:0]];
+	return [[NSString alloc] initWithData:[[NSData alloc] initWithBase64EncodedData:m options:0] encoding:NSUTF8StringEncoding];
+}
+
+static NSString *TTBase64URL(NSData *d) {
+	NSString *s = [d base64EncodedStringWithOptions:0];
+	s = [[s stringByReplacingOccurrencesOfString:@"+" withString:@"-"] stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+	return [s stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"="]];
+}
+
+static void TTV1Auth(NSString *path, NSDictionary<NSString *, NSString *> *form, void (^done)(NSDictionary *json, NSInteger status)) {
+	static NSURLSession *session;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{ session = [NSURLSession sessionWithConfiguration:NSURLSessionConfiguration.ephemeralSessionConfiguration]; });
+	NSCharacterSet *ok = [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"];
+	NSMutableArray *pairs = [NSMutableArray array];
+	[form enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSString *v, BOOL *stop) {
+		[pairs addObject:[NSString stringWithFormat:@"%@=%@", k, [v stringByAddingPercentEncodingWithAllowedCharacters:ok]]];
+	}];
+	NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[@"https://auth.tidal.com/v1/oauth2/" stringByAppendingString:path]]];
+	r.HTTPMethod = @"POST";
+	[r setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+	r.HTTPBody = [[pairs componentsJoinedByString:@"&"] dataUsingEncoding:NSUTF8StringEncoding];
+	[[session dataTaskWithRequest:r completionHandler:^(NSData *d, NSURLResponse *resp, NSError *e) {
+		done(TTAs(d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil, NSDictionary.class), TTAs(resp, NSHTTPURLResponse.class) ? ((NSHTTPURLResponse *)resp).statusCode : 0);
+	}] resume];
+}
+
+static NSDictionary *TTV1KeychainItem(void) {
+	return @{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword, (__bridge id)kSecAttrService: @"tt.offline", (__bridge id)kSecAttrAccount: @"v1" };
+}
+
+static NSDictionary *TTV1Tokens(void) {
+	NSMutableDictionary *q = [TTV1KeychainItem() mutableCopy];
+	q[(__bridge id)kSecReturnData] = @YES;
+	CFTypeRef data = NULL;
+	if (SecItemCopyMatching((__bridge CFDictionaryRef)q, &data) != errSecSuccess) return nil;
+	NSDictionary *t = TTAs([NSJSONSerialization JSONObjectWithData:CFBridgingRelease(data) options:0 error:nil], NSDictionary.class);
+	return [t[@"pkce"] boolValue] ? t : nil;
+}
+
+static void TTV1Save(NSDictionary *tokens) {
+	SecItemDelete((__bridge CFDictionaryRef)TTV1KeychainItem());
+	if (!tokens) return (void)dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"TTV1Changed" object:nil]; });
+	NSMutableDictionary *q = [TTV1KeychainItem() mutableCopy];
+	q[(__bridge id)kSecValueData] = [NSJSONSerialization dataWithJSONObject:tokens options:0 error:nil];
+	q[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlock;
+	OSStatus status = SecItemAdd((__bridge CFDictionaryRef)q, NULL);
+	if (status) TTLog(@"v1 keychain save failed: %d", (int)status);
+	dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"TTV1Changed" object:nil]; });
+}
+
+static NSDictionary *TTV1Record(NSDictionary *j, NSString *refresh) {
+	return @{ @"access": j[@"access_token"],
+	          @"refresh": TTAs(j[@"refresh_token"], NSString.class) ?: refresh ?: @"",
+	          @"expires": @(NSDate.date.timeIntervalSince1970 + [j[@"expires_in"] doubleValue]),
+	          @"user": [NSString stringWithFormat:@"%@", j[@"user_id"] ?: @""],
+	          @"pkce": @YES };
+}
+
+// Exported for TidalOffline and TidalHaptics (dlsym)
+NSString *TTV1User(void) { return TTV1Tokens()[@"user"]; }
+
+void TTV1Token(void (^done)(NSString *token)) {
+	NSDictionary *t = TTV1Tokens();
+	if (!t) return done(nil);
+	if ([t[@"expires"] doubleValue] > NSDate.date.timeIntervalSince1970 + 60) return done(t[@"access"]);
+	TTV1Auth(@"token", @{ @"grant_type": @"refresh_token", @"refresh_token": TTAs(t[@"refresh"], NSString.class) ?: @"", @"client_id": TTV1Client(NO), @"client_secret": TTV1Client(YES), @"scope": kV1Scope },
+	         ^(NSDictionary *j, NSInteger status) {
+		         if (!TTAs(j[@"access_token"], NSString.class)) {
+			         TTLog(@"v1 login refresh failed (%ld %@)", (long)status, j[@"error"] ?: @"");
+			         return done(nil);
+		         }
+		         TTV1Save(TTV1Record(j, t[@"refresh"]));
+		         done(j[@"access_token"]);
+	         });
+}
+
+static void TTV1Done(UIViewController *vc, NSString *title, NSString *message) {
+	dispatch_async(dispatch_get_main_queue(), ^{
+		void (^show)(void) = ^{ TTAlert(title, message, nil); };
+		if (vc.presentingViewController) [vc dismissViewControllerAnimated:YES completion:show];
+		else show();
+	});
+}
+
+@interface TTV1LoginPage : UIViewController <WKNavigationDelegate>
+@end
+
+@implementation TTV1LoginPage {
+	NSString *_verifier, *_key;
+	BOOL _done;
+}
+
+- (void)viewDidLoad {
+	[super viewDidLoad];
+	self.title = TTL(@"TIDAL Login", @"TIDAL 로그인");
+	self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(close)];
+	uint8_t raw[32], hash[CC_SHA256_DIGEST_LENGTH];
+	arc4random_buf(raw, sizeof raw);
+	_verifier = TTBase64URL([NSData dataWithBytes:raw length:sizeof raw]);
+	NSData *v = [_verifier dataUsingEncoding:NSUTF8StringEncoding];
+	CC_SHA256(v.bytes, (CC_LONG)v.length, hash);
+	_key = [NSString stringWithFormat:@"%08x%08x", arc4random(), arc4random()];
+	NSURLComponents *c = [NSURLComponents componentsWithString:@"https://login.tidal.com/authorize"];
+	c.queryItems = @[
+		[NSURLQueryItem queryItemWithName:@"response_type" value:@"code"],
+		[NSURLQueryItem queryItemWithName:@"redirect_uri" value:kV1Redirect],
+		[NSURLQueryItem queryItemWithName:@"client_id" value:TTV1Client(NO)],
+		[NSURLQueryItem queryItemWithName:@"lang" value:@"EN"],
+		[NSURLQueryItem queryItemWithName:@"appMode" value:@"android"],
+		[NSURLQueryItem queryItemWithName:@"client_unique_key" value:_key],
+		[NSURLQueryItem queryItemWithName:@"code_challenge" value:TTBase64URL([NSData dataWithBytes:hash length:sizeof hash])],
+		[NSURLQueryItem queryItemWithName:@"code_challenge_method" value:@"S256"],
+		[NSURLQueryItem queryItemWithName:@"restrict_signup" value:@"true"],
+	];
+	WKWebView *web = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:[WKWebViewConfiguration new]];
+	web.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	web.navigationDelegate = self;
+	[self.view addSubview:web];
+	[web loadRequest:[NSURLRequest requestWithURL:c.URL]];
+}
+
+- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+
+- (void)webView:(WKWebView *)web decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decide {
+	NSURL *u = action.request.URL;
+	if (![u.absoluteString hasPrefix:kV1Redirect]) return decide(WKNavigationActionPolicyAllow);
+	decide(WKNavigationActionPolicyCancel);
+	if (_done) return;
+	_done = YES;
+	NSString *code;
+	for (NSURLQueryItem *q in [NSURLComponents componentsWithURL:u resolvingAgainstBaseURL:NO].queryItems)
+		if ([q.name isEqualToString:@"code"]) code = q.value;
+	UIViewController *nav = self.navigationController;
+	if (!code) return TTV1Done(nav, TTL(@"Login failed", @"로그인에 실패했어요"), nil);
+	TTV1Auth(@"token",
+	         @{ @"code": code, @"client_id": TTV1Client(NO), @"grant_type": @"authorization_code", @"redirect_uri": kV1Redirect, @"scope": kV1Scope, @"code_verifier": _verifier,
+	            @"client_unique_key": _key },
+	         ^(NSDictionary *j, NSInteger status) {
+		         if (!TTAs(j[@"access_token"], NSString.class)) {
+			         TTLog(@"v1 login failed (%ld %@)", (long)status, j[@"error"] ?: @"");
+			         return TTV1Done(nav, TTL(@"Login failed", @"로그인에 실패했어요"), j[@"error_description"] ?: j[@"error"]);
+		         }
+		         TTV1Save(TTV1Record(j, nil));
+		         TTLog(@"v1 login ok");
+		         TTV1Done(nav, TTL(@"Logged in", @"로그인했어요"),
+		                  TTL(@"Offline Download (v1) and Music Haptics (song analysis) now use this login.", @"이제 오프라인 다운로드(v1)와 음악 햅틱(곡 분석)이 이 로그인을 써요."));
+	         });
+}
+@end
+
+void TTV1Login(void) {
+	UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:[TTV1LoginPage new]];
+	[TTTop() presentViewController:nav animated:YES completion:nil];
+}
+
 #pragma mark - Settings
 
 typedef BOOL (^TTCheck)(void);
@@ -334,6 +511,7 @@ static NSString *TTString(id textOrBlock) {
 - (void)viewDidLoad {
 	[super viewDidLoad];
 	[self rebuild];
+	[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(rebuild) name:@"TTV1Changed" object:nil];
 }
 
 - (void)rebuild {
@@ -515,6 +693,7 @@ static NSString *TTString(id textOrBlock) {
 	_tweaks = TTInstalled();
 	_rlOpen = dlsym(RTLD_DEFAULT, "RLOpenSettings");
 	[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(updateChanged:) name:@"TTUpdateChanged" object:nil];
+	[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(updateChanged:) name:@"TTV1Changed" object:nil];
 }
 
 - (void)updateChanged:(NSNotification *)n { [self.tableView reloadData]; }
@@ -556,8 +735,13 @@ static NSString *TTString(id textOrBlock) {
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 4; }
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 3 ? 3 + (_showTweaks ? gLoaded.count : 0) : s == 2 ? 2 : 1; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 3 ? 3 + (_showTweaks ? gLoaded.count : 0) : s == 2 ? 3 : 1; }
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 2 ? TTL(@"Advanced", @"고급") : s == 3 ? TTL(@"About Perigee", @"Perigee 정보") : nil; }
+- (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
+	return s == 2 ? TTL(@"v1 login: Offline Download (v1) and Music Haptics (song analysis) get the song's audio with it, without DRM.",
+	                    @"v1 로그인: 오프라인 다운로드(v1)와 음악 햅틱(곡 분석)이 이 로그인으로 DRM 없는 곡 오디오를 받아요.")
+	              : nil;
+}
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
 	UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
@@ -590,6 +774,12 @@ static NSString *TTString(id textOrBlock) {
 		}] forControlEvents:UIControlEventValueChanged];
 		cell.accessoryView = sw;
 		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+	} else if (ip.section == 2 && ip.row == 2) {
+		NSString *user = TTV1User();
+		c = UIListContentConfiguration.valueCellConfiguration;
+		c.text = user ? TTL(@"Log Out of v1", @"v1 로그아웃") : TTL(@"v1 Login", @"v1 로그인");
+		c.secondaryText = user;
+		c.textProperties.color = user ? UIColor.systemRedColor : self.view.tintColor;
 	} else if (ip.section == 2) {
 		c = UIListContentConfiguration.cellConfiguration;
 		c.text = ip.row ? TTL(@"Export Logs", @"로그 내보내기") : TTL(@"Reset Onboarding", @"온보딩 상태 재설정");
@@ -645,6 +835,7 @@ static NSString *TTString(id textOrBlock) {
 	[tv deselectRowAtIndexPath:ip animated:YES];
 	if (ip.section == 0 && ip.row == (NSInteger)_tweaks.count) _rlOpen(self);
 	else if (ip.section == 0) [self.navigationController pushViewController:[[TTTweakPage alloc] initWithTweak:_tweaks[ip.row]] animated:YES];
+	else if (ip.section == 2 && ip.row == 2) TTV1User() ? TTV1Save(nil) : TTV1Login();
 	else if (ip.section == 2 && ip.row) [self exportLogs:[tv cellForRowAtIndexPath:ip]];
 	else if (ip.section == 2) {
 		[NSUserDefaults.standardUserDefaults removeObjectForKey:kSeenBuild];
