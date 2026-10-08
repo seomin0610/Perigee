@@ -287,7 +287,7 @@ static NSString *LLPiece(LLLine *line, double t) {
 }
 
 static double LLElapsed(NSDictionary *info, double at, double now) {
-	return [info[MPNowPlayingInfoPropertyElapsedPlaybackTime] doubleValue] + [info[MPNowPlayingInfoPropertyPlaybackRate] doubleValue] * (now - at);
+	return [info[MPNowPlayingInfoPropertyElapsedPlaybackTime] doubleValue] + [(info[MPNowPlayingInfoPropertyPlaybackRate] ?: @1) doubleValue] * (now - at);
 }
 
 static NSString *LLLineAt(NSDictionary *info, double t) {
@@ -303,12 +303,9 @@ static NSString *LLLineAt(NSDictionary *info, double t) {
 }
 
 static NSDictionary *LLOut(NSDictionary *info, NSString *line, NSDictionary *art, double t) {
-	if (!line && !art) return info;
 	NSMutableDictionary *d = [info mutableCopy];
-	if (line) {
-		d[MPMediaItemPropertyArtist] = line;
-		d[MPNowPlayingInfoPropertyElapsedPlaybackTime] = @(t);
-	}
+	d[MPNowPlayingInfoPropertyElapsedPlaybackTime] = @(t);
+	if (line) d[MPMediaItemPropertyArtist] = line;
 	[d addEntriesFromDictionary:art];
 	return d;
 }
