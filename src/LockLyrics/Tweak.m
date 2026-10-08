@@ -327,10 +327,11 @@ static id LLCardAt(NSDictionary *info, double t) {
 		sungTo = MAX(sungTo, lines[j].end);
 	}
 	NSString *(^text)(NSInteger) = ^NSString *(NSInteger k) { return k >= 0 && k < n ? LLJoin(lines[k].words) : @""; };
-	if (i + 1 < n) LLCard(info, text(i + 1), text(i + 2), -1, NO);
-	if (brk >= 0) return LLCard(info, nil, text(brk), MIN((NSInteger)((t - from) * 6 / (lines[brk].start - from)), 6), YES);
-	if (i < 0 || (i == n - 1 && t > lines[i].end + 2.5)) return LLCard(info, nil, @"", -1, YES);
-	return LLCard(info, text(i), text(i + 1), -1, YES);
+	double now = CACurrentMediaTime();
+	if (i + 1 < n) LLCard(info, text(i + 1), text(i + 2), -1, now + lines[i + 1].start - t, NO);
+	if (brk >= 0) return LLCard(info, nil, text(brk), MIN((NSInteger)((t - from) * 6 / (lines[brk].start - from)), 6), now, YES);
+	if (i < 0 || (i == n - 1 && t > lines[i].end + 2.5)) return LLCard(info, nil, @"", -1, now, YES);
+	return LLCard(info, text(i), text(i + 1), -1, now, YES);
 }
 
 static NSDictionary *LLOut(NSDictionary *info, NSString *line, NSDictionary *art, id card, double t) {

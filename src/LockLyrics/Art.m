@@ -361,14 +361,16 @@ static UIImage *LLBlurred(UIImage *cover) {
 	return u;
 }
 
-static void LLDrawCard(CGSize size, UIImage *backdrop, NSString *now, NSString *next, NSInteger dots) {
+static void LLDrawBackdrop(CGSize size, UIImage *backdrop) {
 	[UIColor.blackColor setFill];
 	UIRectFill((CGRect){ CGPointZero, size });
-	if (backdrop) {
-		CGFloat s = MAX(size.width / backdrop.size.width, size.height / backdrop.size.height);
-		CGSize d = CGSizeMake(backdrop.size.width * s, backdrop.size.height * s);
-		[backdrop drawInRect:CGRectMake((size.width - d.width) / 2, (size.height - d.height) / 2, d.width, d.height)];
-	}
+	if (!backdrop) return;
+	CGFloat s = MAX(size.width / backdrop.size.width, size.height / backdrop.size.height);
+	CGSize d = CGSizeMake(backdrop.size.width * s, backdrop.size.height * s);
+	[backdrop drawInRect:CGRectMake((size.width - d.width) / 2, (size.height - d.height) / 2, d.width, d.height)];
+}
+
+static void LLDrawText(CGSize size, NSString *now, NSString *next, NSInteger dots) {
 	if (!now && dots < 0) return;
 	CGFloat margin = size.width * 0.08;
 	CGSize box = CGSizeMake(size.width - 2 * margin, CGFLOAT_MAX);
@@ -401,29 +403,99 @@ static void LLDrawCard(CGSize size, UIImage *backdrop, NSString *now, NSString *
 	[small drawWithRect:CGRectMake(margin, y + bh + gap, box.width, sh) options:NSStringDrawingUsesLineFragmentOrigin context:nil];
 }
 
-static NSURL *LLStill(size_t W, size_t H, void (^draw)(CGSize size)) {
-	CVPixelBufferRef pb = NULL;
-	NSDictionary *attrs = @{ (id)kCVPixelBufferCGImageCompatibilityKey: @YES, (id)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES };
-	if (CVPixelBufferCreate(NULL, W, H, kCVPixelFormatType_32BGRA, (__bridge CFDictionaryRef)attrs, &pb) != kCVReturnSuccess) return nil;
-	CVPixelBufferLockBaseAddress(pb, 0);
+static CGContextRef LLContext(void *data, size_t W, size_t H, size_t row, BOOL opaque) {
 	CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-	CGContextRef ctx = CGBitmapContextCreate(CVPixelBufferGetBaseAddress(pb), W, H, 8, CVPixelBufferGetBytesPerRow(pb), cs, kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+	CGContextRef ctx = CGBitmapContextCreate(data, W, H, 8, row, cs, (opaque ? kCGImageAlphaNoneSkipFirst : kCGImageAlphaPremultipliedFirst) | kCGBitmapByteOrder32Little);
 	CGColorSpaceRelease(cs);
 	CGContextTranslateCTM(ctx, 0, H);
 	CGContextScaleCTM(ctx, 1, -1);
+	CGContextSetInterpolationQuality(ctx, kCGInterpolationMedium);
+	return ctx;
+}
+
+static UIImage *LLBitmap(size_t W, size_t H, BOOL opaque, void (^draw)(CGSize size)) {
+	CGContextRef ctx = LLContext(NULL, W, H, 0, opaque);
 	UIGraphicsPushContext(ctx);
 	draw(CGSizeMake(W, H));
 	UIGraphicsPopContext();
+	CGImageRef img = CGBitmapContextCreateImage(ctx);
 	CGContextRelease(ctx);
-	CVPixelBufferUnlockBaseAddress(pb, 0);
+	UIImage *u = [UIImage imageWithCGImage:img];
+	CGImageRelease(img);
+	return u;
+}
 
+static const NSInteger kMoveFrames = 90;
+static const int32_t kMoveFPS = 15;
+
+static float LLHash(int x, int y) {
+	uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u;
+	h = (h ^ (h >> 13)) * 1274126177u;
+	return (float)(h ^ (h >> 16)) / 2147483647.5f - 1;
+}
+
+static float LLNoise(float x, float y) {
+	int ix = (int)floorf(x), iy = (int)floorf(y);
+	float fx = x - ix, fy = y - iy;
+	fx = fx * fx * (3 - 2 * fx);
+	fy = fy * fy * (3 - 2 * fy);
+	float a = LLHash(ix, iy), b = LLHash(ix + 1, iy), c = LLHash(ix, iy + 1), d = LLHash(ix + 1, iy + 1);
+	return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+}
+
+// one seamless loop of the blurred cover pushed around by slow noise; the noise is walked round a circle so the last frame meets the first
+static NSArray<UIImage *> *LLMoving(UIImage *blurred) {
+	const size_t W = 120, H = 160, S = 100;
+	CGContextRef sc = LLContext(NULL, S, S, 0, YES);
+	UIGraphicsPushContext(sc);
+	[UIColor.blackColor setFill];
+	UIRectFill(CGRectMake(0, 0, S, S));
+	[blurred drawInRect:CGRectMake(0, 0, S, S)];
+	UIGraphicsPopContext();
+	const uint8_t *src = CGBitmapContextGetData(sc);
+	size_t srow = CGBitmapContextGetBytesPerRow(sc);
+
+	NSMutableArray<UIImage *> *frames = [NSMutableArray array];
+	for (NSInteger f = 0; f < kMoveFrames; f++) {
+		float p = 2 * M_PI * f / kMoveFrames, cx = 0.45f * cosf(p), cy = 0.45f * sinf(p);
+		CGContextRef ctx = LLContext(NULL, W, H, 0, YES);
+		uint8_t *out = CGBitmapContextGetData(ctx);
+		size_t orow = CGBitmapContextGetBytesPerRow(ctx);
+		for (size_t y = 0; y < H; y++)
+			for (size_t x = 0; x < W; x++) {
+				float u = (x + 0.5f) / W, v = (y + 0.5f) / H, nu = u * 1.3f, nv = v * 1.7f;
+				float dx = LLNoise(nu + cx, nv + cy) + 0.5f * LLNoise(2 * nu - cy + 7.3f, 2 * nv + cx + 1.7f);
+				float dy = LLNoise(nu + cy + 31.7f, nv - cx + 11.1f) + 0.5f * LLNoise(2 * nu + cx + 3.1f, 2 * nv - cy + 23.9f);
+				float sx = fminf(fmaxf(0.5f + (u - 0.5f + dx * 0.2f) * 0.75f, 0), 1) * (S - 1);
+				float sy = fminf(fmaxf(v + dy * 0.2f, 0), 1) * (S - 1);
+				size_t x0 = (size_t)sx, y0 = (size_t)sy, x1 = MIN(x0 + 1, S - 1), y1 = MIN(y0 + 1, S - 1);
+				float tx = sx - x0, ty = sy - y0;
+				uint8_t *o = out + y * orow + x * 4;
+				for (int k = 0; k < 3; k++) {
+					float top = src[y0 * srow + x0 * 4 + k] * (1 - tx) + src[y0 * srow + x1 * 4 + k] * tx;
+					float bottom = src[y1 * srow + x0 * 4 + k] * (1 - tx) + src[y1 * srow + x1 * 4 + k] * tx;
+					o[k] = (uint8_t)(top * (1 - ty) + bottom * ty + 0.5f);
+				}
+				o[3] = 255;
+			}
+		CGImageRef img = CGBitmapContextCreateImage(ctx);
+		CGContextRelease(ctx);
+		[frames addObject:[UIImage imageWithCGImage:img]];
+		CGImageRelease(img);
+	}
+	CGContextRelease(sc);
+	return frames;
+}
+
+static NSURL *LLClip(size_t W, size_t H, NSInteger n, int32_t fps, void (^draw)(CGSize size, NSInteger f)) {
 	NSFileManager *fm = NSFileManager.defaultManager;
 	[fm createDirectoryAtURL:LLCardDir() withIntermediateDirectories:YES attributes:nil error:nil];
 	NSURL *dst = [LLCardDir() URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingString:@".mp4"]];
 	NSURL *tmp = [dst URLByAppendingPathExtension:@"part.mp4"];
 	AVAssetWriter *w = [AVAssetWriter assetWriterWithURL:tmp fileType:AVFileTypeMPEG4 error:nil];
 	AVAssetWriterInput *in = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:@{ AVVideoCodecKey: AVVideoCodecTypeH264, AVVideoWidthKey: @(W), AVVideoHeightKey: @(H) }];
-	AVAssetWriterInputPixelBufferAdaptor *ad = [AVAssetWriterInputPixelBufferAdaptor assetWriterInputPixelBufferAdaptorWithAssetWriterInput:in sourcePixelBufferAttributes:nil];
+	NSDictionary *attrs = @{ (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA), (id)kCVPixelBufferWidthKey: @(W), (id)kCVPixelBufferHeightKey: @(H), (id)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES };
+	AVAssetWriterInputPixelBufferAdaptor *ad = [AVAssetWriterInputPixelBufferAdaptor assetWriterInputPixelBufferAdaptorWithAssetWriterInput:in sourcePixelBufferAttributes:attrs];
 	BOOL ok = [w canAddInput:in];
 	if (ok) {
 		[w addInput:in];
@@ -431,20 +503,35 @@ static NSURL *LLStill(size_t W, size_t H, void (^draw)(CGSize size)) {
 	}
 	if (ok) {
 		[w startSessionAtSourceTime:kCMTimeZero];
-		for (int s = 0; ok && s < 2; s++) {
+		NSInteger frames = MAX(n, 2);
+		CVPixelBufferRef pb = NULL;
+		for (NSInteger f = 0; ok && f < frames; f++) {
+			if (f < n) {
+				CVPixelBufferRelease(pb);
+				pb = NULL;
+				ok = ad.pixelBufferPool && CVPixelBufferPoolCreatePixelBuffer(NULL, ad.pixelBufferPool, &pb) == kCVReturnSuccess;
+				if (!ok) break;
+				CVPixelBufferLockBaseAddress(pb, 0);
+				CGContextRef ctx = LLContext(CVPixelBufferGetBaseAddress(pb), W, H, CVPixelBufferGetBytesPerRow(pb), YES);
+				UIGraphicsPushContext(ctx);
+				draw(CGSizeMake(W, H), f);
+				UIGraphicsPopContext();
+				CGContextRelease(ctx);
+				CVPixelBufferUnlockBaseAddress(pb, 0);
+			}
 			while (!in.readyForMoreMediaData && w.status == AVAssetWriterStatusWriting) usleep(2000);
-			ok = [ad appendPixelBuffer:pb withPresentationTime:CMTimeMake(s, 1)];
+			ok = [ad appendPixelBuffer:pb withPresentationTime:CMTimeMake(f, fps)];
 		}
+		CVPixelBufferRelease(pb);
 		if (w.status == AVAssetWriterStatusWriting) {
 			[in markAsFinished];
-			[w endSessionAtSourceTime:CMTimeMake(2, 1)];
+			[w endSessionAtSourceTime:CMTimeMake(frames, fps)];
 			dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 			[w finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(sem); }];
 			dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
 		}
 		ok = ok && w.status == AVAssetWriterStatusCompleted && [fm moveItemAtURL:tmp toURL:dst error:nil];
 	}
-	CVPixelBufferRelease(pb);
 	if (!ok) {
 		LLLog(@"lyrics card failed: %@", w.error);
 		[fm removeItemAtURL:tmp error:nil];
@@ -452,9 +539,9 @@ static NSURL *LLStill(size_t W, size_t H, void (^draw)(CGSize size)) {
 	return ok ? dst : nil;
 }
 
-static void LLRender(NSUInteger gen, void (^draw)(CGSize size), size_t W, size_t H, void (^done)(id art)) {
+static void LLRender(NSUInteger gen, NSURL *(^make)(void), void (^done)(id art)) {
 	dispatch_async(gCardQueue, ^{
-		NSURL *file = LLStill(W, H, draw);
+		NSURL *file = make();
 		id art = LLAnimated([@"card-" stringByAppendingString:file.lastPathComponent ?: @""], file);
 		dispatch_async(dispatch_get_main_queue(), ^{
 			if (gen == gCardGen) done(art);
@@ -462,7 +549,7 @@ static void LLRender(NSUInteger gen, void (^draw)(CGSize size), size_t W, size_t
 	});
 }
 
-id LLCard(NSDictionary *info, NSString *now, NSString *next, NSInteger dots, BOOL shown) {
+id LLCard(NSDictionary *info, NSString *now, NSString *next, NSInteger dots, double at, BOOL shown) {
 	NSString *title = info[MPMediaItemPropertyTitle];
 	MPMediaItemArtwork *artwork = LLAs(info[MPMediaItemPropertyArtwork], MPMediaItemArtwork.class);
 	if (!gCards) {
@@ -482,7 +569,9 @@ id LLCard(NSDictionary *info, NSString *now, NSString *next, NSInteger dots, BOO
 		UIImage *cover = [artwork imageWithSize:CGSizeMake(600, 600)];
 		if (cover) {
 			gSquareAsked = YES;
-			LLRender(gen, ^(CGSize s) { [cover drawInRect:(CGRect){ CGPointZero, s }]; }, 600, 600, ^(id art) {
+			LLRender(gen, ^NSURL * {
+				return LLClip(600, 600, 1, 1, ^(CGSize s, NSInteger f) { [cover drawInRect:(CGRect){ CGPointZero, s }]; });
+			}, ^(id art) {
 				gCardSquare = art;
 				if (art) LLSend(YES);
 			});
@@ -492,17 +581,30 @@ id LLCard(NSDictionary *info, NSString *now, NSString *next, NSInteger dots, BOO
 	id card = gCards[key];
 	if (!card) {
 		gCards[key] = NSNull.null;
-		BOOL plain = !now && dots < 0;
+		BOOL plain = !now && dots < 0, moving = !plain && LLOn(@"moving");
 		UIImage *cover = [artwork imageWithSize:plain ? CGSizeMake(1280, 1280) : CGSizeMake(200, 200)];
-		LLRender(gen, ^(CGSize s) {
+		LLRender(gen, ^NSURL * {
 			static NSUInteger blurGen;
 			static UIImage *blurred;
+			static NSArray<UIImage *> *frames;
 			if (!plain && (blurGen != gen || (!blurred && cover))) {
 				blurGen = gen;
 				blurred = LLBlurred(cover);
+				frames = nil;
 			}
-			LLDrawCard(s, plain ? cover : blurred, now, next, dots);
-		}, 960, 1280, ^(id art) {
+			if (!moving) return LLClip(960, 1280, 1, 1, ^(CGSize s, NSInteger f) {
+				LLDrawBackdrop(s, plain ? cover : blurred);
+				LLDrawText(s, now, next, dots);
+			});
+			if (!frames) frames = LLMoving(blurred);
+			NSArray<UIImage *> *loop = frames;
+			UIImage *overlay = LLBitmap(960, 1280, NO, ^(CGSize s) { LLDrawText(s, now, next, dots); });
+			NSInteger phase = (NSInteger)(fmod(at, (double)kMoveFrames / kMoveFPS) * kMoveFPS) % kMoveFrames;
+			return LLClip(960, 1280, kMoveFrames, kMoveFPS, ^(CGSize s, NSInteger f) {
+				[loop[(f + phase) % kMoveFrames] drawInRect:(CGRect){ CGPointZero, s }];
+				[overlay drawInRect:(CGRect){ CGPointZero, s }];
+			});
+		}, ^(id art) {
 			gCards[key] = art ?: NSNull.null;
 			if (art) LLSend(NO);
 		});

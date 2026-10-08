@@ -13,7 +13,7 @@ static inline void LLLog(NSString *fmt, ...) {
 
 static inline BOOL LLOn(NSString *k) {
 	id v = [NSUserDefaults.standardUserDefaults objectForKey:[@"ll." stringByAppendingString:k]];
-	return v ? [v boolValue] : ![k isEqualToString:@"full"];
+	return v ? [v boolValue] : ![k isEqualToString:@"full"] && ![k isEqualToString:@"moving"];
 }
 
 static inline id LLAs(id v, Class c) { return [v isKindOfClass:c] ? v : nil; }
@@ -28,7 +28,7 @@ BOOL LLArtAvailable(void);
 void LLArtReset(BOOL files);
 unsigned long long LLArtCacheBytes(void);
 NSString *LLTallKey(void);
-id LLCard(NSDictionary *info, NSString *now, NSString *next, NSInteger dots, BOOL shown);
+id LLCard(NSDictionary *info, NSString *now, NSString *next, NSInteger dots, double at, BOOL shown);
 void LLCardInto(NSMutableDictionary *d, id card);
 
 void LLSettingsInit(void);
