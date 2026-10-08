@@ -24,6 +24,7 @@ external/RadiantTidal/RadiantTidal.dylib
 src/Meanings/TidalMeanings.dylib
 src/KoreanSearch/TidalKoreanSearch.dylib
 src/Offline/TidalOffline.dylib
+src/Loudness/TidalLoudness.dylib
 src/LiquidTab/TidalLiquidTab.dylib
 src/Haptics/TidalHaptics.dylib
 src/Core/TidalCore.dylib
