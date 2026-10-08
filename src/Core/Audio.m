@@ -316,15 +316,17 @@ static void TTATapPrepare(MTAudioProcessingTapRef tap, CMItemCount max, const Au
 }
 
 static void TTATapProcess(MTAudioProcessingTapRef tap, CMItemCount n, MTAudioProcessingTapFlags flags, AudioBufferList *bufs, CMItemCount *outN, MTAudioProcessingTapFlags *outFlags) {
-	if (MTAudioProcessingTapGetSourceAudio(tap, n, bufs, outFlags, NULL, outN)) return;
+	CMTimeRange range = kCMTimeRangeInvalid;
+	if (MTAudioProcessingTapGetSourceAudio(tap, n, bufs, outFlags, &range, outN)) return;
 	TTATap *t = MTAudioProcessingTapGetStorage(tap);
+	double time = CMTIME_IS_NUMERIC(range.start) ? CMTimeGetSeconds(range.start) : NAN;
 	if (!t->ok) return;
 	BOOL start = (*outFlags & kMTAudioProcessingTapFlag_StartOfStream) != 0;
 	float *p[kMaxChannels];
 	BOOL split = bufs->mNumberBuffers >= t->ch;
 	for (unsigned c = 0; c < t->ch; c++) p[c] = split ? bufs->mBuffers[c].mData : (float *)bufs->mBuffers[0].mData + c;
 	for (unsigned i = 0; i < gCount; i++)
-		if (t->ctx[i]) gStages[i].process(t->ctx[i], p, split ? 1 : t->ch, *outN, start);
+		if (t->ctx[i]) gStages[i].process(t->ctx[i], p, split ? 1 : t->ch, *outN, start, time);
 }
 
 static AVAudioMix *TTAMix(AVPlayerItem *item, AVAudioMix *mix) {

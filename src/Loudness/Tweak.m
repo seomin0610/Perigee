@@ -103,7 +103,7 @@ static void *LDPrepare(NSString *uri, double rate, unsigned ch, unsigned maxFram
 	return t;
 }
 
-static void LDProcess(void *ctx, float **p, unsigned stride, size_t frames, BOOL start) {
+static void LDProcess(void *ctx, float **p, unsigned stride, size_t frames, BOOL start, double time) {
 	LDTap *t = ctx;
 	if (start) LDDSPReset(&t->dsp);
 	BOOL eq = atomic_load(&gEQ);

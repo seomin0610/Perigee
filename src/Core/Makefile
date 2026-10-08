@@ -11,7 +11,7 @@ TidalCore_CFLAGS += -D__IPHONE_OS_VERSION_MIN_REQUIRED=160000
 ifdef TT_BUILD
 TidalCore_CFLAGS += -DTT_BUILD='@"$(TT_BUILD)"'
 endif
-TidalCore_FRAMEWORKS = UIKit OSLog CoreGraphics WebKit Security AVFoundation MediaToolbox
+TidalCore_FRAMEWORKS = UIKit OSLog CoreGraphics WebKit Security AVFoundation CoreMedia MediaToolbox
 TidalCore_USE_MODULES = 0
 
 include $(THEOS_MAKE_PATH)/tweak.mk

@@ -3,17 +3,18 @@
 #import <os/log.h>
 #import <stdatomic.h>
 #import "DSP.h"
+#import "KR.h"
 #import "../Core/TTAudio.h"
 
 static NSString *const kOn = @"kr.on";
 static NSString *const kLevel = @"kr.level";
 static NSString *const kEngine = @"kr.engine";
+static NSString *const kScore = @"kr.score";
 static _Atomic(bool) gOn = true;
 static _Atomic(float) gLevel = 1;
 static _Atomic(int) gUsing;
 
-static void KRLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
-static void KRLog(NSString *fmt, ...) {
+void KRLog(NSString *fmt, ...) {
 	va_list args;
 	va_start(args, fmt);
 	NSString *line = [[NSString alloc] initWithFormat:fmt arguments:args];
@@ -21,15 +22,17 @@ static void KRLog(NSString *fmt, ...) {
 	os_log(OS_LOG_DEFAULT, "[TidalKaraoke] %{public}@", line);
 }
 
-static NSString *KRL(NSString *en, NSString *ko) {
+NSString *KRL(NSString *en, NSString *ko) {
 	NSInteger lang = [NSUserDefaults.standardUserDefaults integerForKey:@"rl.lang"];
 	return (lang ? lang == 2 : [NSLocale.preferredLanguages.firstObject hasPrefix:@"ko"]) ? ko : en;
 }
 
-static BOOL KROn(void) {
+BOOL KROn(void) {
 	id v = [NSUserDefaults.standardUserDefaults objectForKey:kOn];
 	return v ? [v boolValue] : YES;
 }
+
+int KRUsing(void) { return atomic_load(&gUsing); }
 
 static float KRLevel(id v) { return (v ? [v floatValue] : 100) / 100; }
 
@@ -37,9 +40,12 @@ static float KRLevel(id v) { return (v ? [v floatValue] : 100) / 100; }
 
 typedef struct {
 	KRDSP dsp;
+	KRPitch pitch;
 	AudioUnit au;
 	float *mid;
 	unsigned max;
+	NSUInteger item;
+	double rate, latency;
 	Float64 time;
 	BOOL broken;
 } KRTap;
@@ -104,8 +110,12 @@ static void *KRPrepare(NSString *uri, double rate, unsigned ch, unsigned max) {
 	KRTap *t = calloc(1, sizeof *t);
 	t->max = max;
 	t->mid = calloc(max, sizeof(float));
+	t->item = uri.hash;
+	t->rate = rate;
+	KRPitchInit(&t->pitch, rate);
 	double latency = 0;
 	if ([NSUserDefaults.standardUserDefaults integerForKey:kEngine] == 0) t->au = KRIsolator(t, rate, &latency);
+	t->latency = latency;
 	if (!KRDSPInit(&t->dsp, rate, ch, t->au ? (unsigned)lround(latency * rate) : 0)) {
 		KRLog(@"can't process %u ch at %.0f Hz", ch, rate);
 		KRFree(t);
@@ -117,7 +127,7 @@ static void *KRPrepare(NSString *uri, double rate, unsigned ch, unsigned max) {
 	return t;
 }
 
-static void KRProcess(void *ctx, float **p, unsigned stride, size_t n, BOOL start) {
+static void KRProcess(void *ctx, float **p, unsigned stride, size_t n, BOOL start, double time) {
 	KRTap *t = ctx;
 	if (start) {
 		KRDSPReset(&t->dsp);
@@ -143,6 +153,12 @@ static void KRProcess(void *ctx, float **p, unsigned stride, size_t n, BOOL star
 			return KRCenter(&t->dsp, p, stride, n, target);
 		}
 		vocal = out.mBuffers[0].mData;
+		if (isfinite(time) && KRScoreWants(t->item)) {
+			double at = time - t->latency - KRPitchDelay(&t->pitch);
+			float note;
+			for (size_t i = 0; i < n; i++)
+				if (KRPitchPush(&t->pitch, vocal[i], 0.01f, &note)) KRScorePush(at + (i + 1) / t->rate, note);
+		}
 	}
 	t->time += n;
 	KRSubtract(&t->dsp, p, stride, n, vocal, vocal ? target : 0);
@@ -169,15 +185,22 @@ static NSString *KRStatus(void) {
 	return @[
 		@{ @"items": @[
 			   @{ @"type": @"switch", @"key": kOn, @"default": @YES, @"title": KRL(@"Turn vocals down", @"보컬 줄이기"), @"detail": KRStatus(),
-			      @"set": ^(id v) { atomic_store(&gOn, v ? [v boolValue] : true); } },
+			      @"set": ^(id v) {
+				      atomic_store(&gOn, v ? [v boolValue] : true);
+				      KRScoreSet([NSUserDefaults.standardUserDefaults boolForKey:kScore]);
+			      } },
 			   @{ @"type": @"choice", @"key": kLevel, @"default": @100, @"title": KRL(@"Amount", @"줄이는 양"), @"indent": @YES, @"visible": ^BOOL { return KROn(); },
 			      @"options": @[ @[ @100, @"100%" ], @[ @75, @"75%" ], @[ @50, @"50%" ] ], @"set": ^(id v) { atomic_store(&gLevel, KRLevel(v)); } },
+			   @{ @"type": @"switch", @"key": kScore, @"default": @NO, @"title": KRL(@"Scoring", @"채점"), @"indent": @YES, @"visible": ^BOOL { return KROn(); },
+			      @"detail": KRScoreStatus(), @"set": ^(id v) { KRScoreSet([v boolValue]); } },
 			   @{ @"type": @"choice", @"key": kEngine, @"default": @0, @"title": KRL(@"Method", @"방식"),
 			      @"options": @[ @[ @0, KRL(@"Apple voice isolation", @"Apple 목소리 분리"), KRL(@"Center cancel if it doesn't work", @"안 되면 센터 제거") ],
 			                     @[ @1, KRL(@"Center cancel", @"센터 제거"), KRL(@"Classic karaoke: drops what's in the middle", @"가운데 소리를 빼는 옛 노래방 방식") ] ] },
 		   ],
-		   @"footer": KRL(@"Needs Secondary Login (Advanced). On/off and amount change right away, the method from the next song.",
-		                  @"보조 로그인(고급)이 필요해요. 켜고 끄기와 양은 바로, 방식은 다음 곡부터 바뀌어요.") },
+		   @"footer": KRL(@"Needs Secondary Login (Advanced). On/off and amount change right away, the method from the next song. "
+		                  @"Scoring listens through the microphone while a song plays and shows your score when it ends.",
+		                  @"보조 로그인(고급)이 필요해요. 켜고 끄기와 양은 바로, 방식은 다음 곡부터 바뀌어요. "
+		                  @"채점은 곡이 나오는 동안 마이크로 듣고, 곡이 끝나면 점수를 보여줘요.") },
 	];
 }
 @end
@@ -191,5 +214,6 @@ __attribute__((constructor)) static void KRInit(void) {
 	if (!add) return KRLog(@"needs TidalCore");
 	static const TTAudioStage stage = { KRWantsV1, NULL, KRPrepare, KRProcess, KRFree };
 	add(&stage);
+	KRScoreInit();
 	KRLog(@"loaded");
 }
