@@ -99,4 +99,14 @@ __attribute__((constructor)) static void SFSideloadFix(void) {
 	Method t = class_getInstanceMethod(NSClassFromString(@"AVAssetDownloadURLSession"), sel), base = class_getInstanceMethod(NSURLSession.class, sel);
 	if (base) orig_baseAssetTask = (SFAssetTaskIMP)method_setImplementation(base, (IMP)hook_baseAssetTask);
 	if (t && t != base) orig_assetTask = (SFAssetTaskIMP)method_setImplementation(t, (IMP)hook_assetTask);
+
+	// Now Playing taps open the profile's App ID, which isn't installed under that name: point them at our real bundle id
+	void *mr = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
+	void *(*localOrigin)(void) = mr ? dlsym(mr, "MRMediaRemoteGetLocalOrigin") : NULL;
+	void (*setParent)(void *, CFStringRef) = mr ? dlsym(mr, "MRMediaRemoteSetParentApplication") : NULL;
+	if (!localOrigin || !setParent) return NSLog(@"[TidalSideloadFix] MRMediaRemoteSetParentApplication missing");
+	[NSNotificationCenter.defaultCenter addObserverForName:@"UIApplicationDidBecomeActiveNotification" object:nil queue:nil usingBlock:^(NSNotification *n) {
+		setParent(localOrigin(), (__bridge CFStringRef)NSBundle.mainBundle.bundleIdentifier);
+		NSLog(@"[TidalSideloadFix] now playing parent app = %@", NSBundle.mainBundle.bundleIdentifier);
+	}];
 }
