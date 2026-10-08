@@ -37,6 +37,7 @@ static NSString *const kOnKey = @"ht.enabled";
 static NSString *const kAppleKey = @"ht.apple";
 static NSString *const kFollowKey = @"ht.follow";
 static NSString *const kStrengthKey = @"ht.strength";
+static NSString *const kHandoffKey = @"ht.handoff";
 
 static BOOL HTOn(void) { return [NSUserDefaults.standardUserDefaults boolForKey:kOnKey]; }
 static BOOL HTHasCore(void) {
@@ -46,6 +47,10 @@ static BOOL HTHasCore(void) {
 }
 static BOOL HTApple(void) { return !HTHasCore() || [NSUserDefaults.standardUserDefaults boolForKey:kAppleKey]; }
 static BOOL HTOwn(void) { return HTOn() && !HTApple(); }
+static BOOL HTHandoff(void) { return [[NSUserDefaults.standardUserDefaults objectForKey:kHandoffKey] ?: @YES boolValue]; }
+static BOOL HTSendISRC(void) {
+	return HTOn() && (HTApple() || (HTHandoff() && UIApplication.sharedApplication.applicationState != UIApplicationStateActive));
+}
 
 static NSString *HTL(NSString *en, NSString *ko) {
 	NSInteger lang = [NSUserDefaults.standardUserDefaults integerForKey:@"rl.lang"];
@@ -141,7 +146,7 @@ static void HTCheck(NSString *isrc, NSString *title) {
 }
 
 static NSDictionary *HTWithISRC(NSDictionary *info) {
-	if (!kISRCKey || info[kISRCKey] || !HTOn() || !HTApple()) return info;
+	if (!kISRCKey || info[kISRCKey] || !HTSendISRC()) return info;
 	NSString *isrc = HTMatch(info)[0];
 	if (!isrc) return info;
 	HTCheck(isrc, info[MPMediaItemPropertyTitle]);
@@ -455,9 +460,10 @@ static BOOL HTEngine(void) {
 	engine.autoShutdownEnabled = YES;
 	engine.resetHandler = ^{
 		dispatch_async(dispatch_get_main_queue(), ^{
+			NSError *e;
 			gRumble = nil;
 			[gLive removeAllObjects];
-			[gEngine startAndReturnError:nil];
+			[gEngine startAndReturnError:&e];
 		});
 	};
 	engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
@@ -474,31 +480,33 @@ static BOOL HTEngine(void) {
 	return YES;
 }
 
+// CoreHaptics raises instead of failing when error is nil (engine stopped in the background = app killed)
 static BOOL HTPlay(id<CHHapticPatternPlayer> p) {
-	return p && ([p startAtTime:CHHapticTimeImmediate error:nil] || ([gEngine startAndReturnError:nil] && [p startAtTime:CHHapticTimeImmediate error:nil]));
+	NSError *e;
+	return p && ([p startAtTime:CHHapticTimeImmediate error:&e] || ([gEngine startAndReturnError:&e] && [p startAtTime:CHHapticTimeImmediate error:&e]));
 }
 
 static CHHapticEventParameter *HTParam(CHHapticEventParameterID ident, float v) { return [[CHHapticEventParameter alloc] initWithParameterID:ident value:v]; }
 
 static void HTRumble(NSArray<CHHapticParameterCurveControlPoint *> *points) {
+	NSError *e;
 	if ([[points valueForKeyPath:@"@max.value"] floatValue] < 0.02f) {
-		[gRumble stopAtTime:CHHapticTimeImmediate error:nil];
+		[gRumble stopAtTime:CHHapticTimeImmediate error:&e];
 		gRumble = nil;
 		return;
 	}
 	if (!gRumble) {
-		CHHapticEvent *e = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
+		CHHapticEvent *ev = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
 		                                                 parameters:@[ HTParam(CHHapticEventParameterIDHapticIntensity, 1), HTParam(CHHapticEventParameterIDHapticSharpness, 0.1) ]
 		                                               relativeTime:0
 		                                                   duration:30];
-		CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[ e ] parameters:@[] error:nil];
-		id<CHHapticAdvancedPatternPlayer> p = pattern ? [gEngine createAdvancedPlayerWithPattern:pattern error:nil] : nil;
+		CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[ ev ] parameters:@[] error:&e];
+		id<CHHapticAdvancedPatternPlayer> p = pattern ? [gEngine createAdvancedPlayerWithPattern:pattern error:&e] : nil;
 		p.loopEnabled = YES;
 		if (!HTPlay(p)) return;
 		gRumble = p;
 	}
 	static BOOL curvesFail;
-	NSError *e;
 	if (!curvesFail && points.count > 1) {
 		CHHapticParameterCurve *curve = [[CHHapticParameterCurve alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl controlPoints:points relativeTime:0];
 		if ([gRumble scheduleParameterCurve:curve atTime:CHHapticTimeImmediate error:&e]) return;
@@ -520,9 +528,10 @@ static void HTStop(void) {
 	if (gTimer) dispatch_source_cancel(gTimer);
 	gTimer = nil;
 	gUntil = -1;
-	[gRumble stopAtTime:CHHapticTimeImmediate error:nil];
+	NSError *e;
+	[gRumble stopAtTime:CHHapticTimeImmediate error:&e];
 	gRumble = nil;
-	for (id<CHHapticPatternPlayer> p in gLive) [p stopAtTime:CHHapticTimeImmediate error:nil];
+	for (id<CHHapticPatternPlayer> p in gLive) [p stopAtTime:CHHapticTimeImmediate error:&e];
 	[gLive removeAllObjects];
 }
 
@@ -554,8 +563,9 @@ static void HTTick(void) {
 	}
 	gUntil = end;
 	if (events.count) {
-		CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:events parameters:@[] error:nil];
-		id<CHHapticPatternPlayer> player = pattern ? [gEngine createPlayerWithPattern:pattern error:nil] : nil;
+		NSError *e;
+		CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:events parameters:@[] error:&e];
+		id<CHHapticPatternPlayer> player = pattern ? [gEngine createPlayerWithPattern:pattern error:&e] : nil;
 		if (HTPlay(player)) [gLive addObject:player];
 		if (gLive.count > 8) [gLive removeObjectAtIndex:0];
 	}
@@ -584,7 +594,7 @@ static void HTWake(void) {
 static void HTApply(void) {
 	HTWake();
 	if (!gInfo || !kISRCKey) return;
-	if (HTOn() && HTApple()) return HTLearn(@[]);
+	if (HTSendISRC()) return HTLearn(@[]);
 	if (!gInfo[kISRCKey]) return;
 	NSMutableDictionary *d = [gInfo mutableCopy];
 	[d removeObjectForKey:kISRCKey];
@@ -620,7 +630,9 @@ static NSString *HTOwnStatus(void) {
 	                : gLoad == HTLoading ? HTL(@"This song: analysing…", @"이 곡: 분석 중…")
 	                : gLoad == HTFailed ? HTL(@"This song: couldn't get its audio", @"이 곡: 오디오를 못 받았어요")
 	                : [NSString stringWithFormat:HTL(@"This song: %lu taps", @"이 곡: 탭 %lu개"), (unsigned long)(gTaps.length / sizeof(HTTap))];
-	return [now stringByAppendingString:HTL(@"\nPlays while TIDAL is on screen.", @"\nTIDAL 화면이 켜져 있을 때만 울려요.")];
+	if (!HTHandoff()) return [now stringByAppendingString:HTL(@"\nPlays while TIDAL is on screen.", @"\nTIDAL 화면이 켜져 있을 때만 울려요.")];
+	return [now stringByAppendingString:!HTSystemOn() ? HTL(@"\nOff screen: Apple haptic tracks are off in iOS (Settings > Accessibility > Music Haptics).", @"\n앱 밖: iOS에서 Apple 햅틱이 꺼져 있어요 (설정 > 손쉬운 사용 > 음악 햅틱).")
+	                                                  : HTL(@"\nOff screen: Apple haptic tracks take over.", @"\n앱 밖에서는 Apple 햅틱 트랙으로 넘어가요.")];
 }
 
 static NSString *HTStatus(void) {
@@ -691,6 +703,7 @@ static void HTAddSettingsEntry(UIViewController *vc) {
 		   @"options": @[ @[ @0, HTL(@"Everything", @"전부") ], @[ @1, HTL(@"Beat", @"비트") ], @[ @2, HTL(@"Bass", @"베이스") ] ] },
 		@{ @"type": @"choice", @"key": kStrengthKey, @"default": @1, @"title": HTL(@"Strength", @"세기"), @"visible": own,
 		   @"options": @[ @[ @0.5, @"50%" ], @[ @1, @"100%" ], @[ @1.5, @"150%" ], @[ @2, @"200%" ] ] },
+		@{ @"type": @"switch", @"key": kHandoffKey, @"default": @YES, @"title": HTL(@"Apple Haptics Off Screen", @"앱 밖에서 Apple 햅틱"), @"visible": own, @"set": ^(id v) { HTApply(); } },
 		@{ @"type": @"action", @"title": HTL(@"Secondary Login", @"보조 로그인"), @"set": ^{ if (login) login(); },
 		   @"visible": ^BOOL { return own() && login && user && !user(); } },
 	],
@@ -717,7 +730,8 @@ __attribute__((constructor)) static void HTInit(void) {
 		if (p) [gPlayers addObject:p];
 		HTWake();
 	}];
-	[NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { HTWake(); }];
+	for (NSNotificationName name in @[ UIApplicationDidBecomeActiveNotification, UIApplicationWillResignActiveNotification ])
+		[NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { HTApply(); }];
 
 	Method set = class_getInstanceMethod(MPNowPlayingInfoCenter.class, @selector(setNowPlayingInfo:));
 	if (!set) return HTLog(@"setNowPlayingInfo: missing, off");
