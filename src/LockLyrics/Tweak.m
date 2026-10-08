@@ -3,6 +3,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
+#import <notify.h>
 
 static const NSTimeInterval kTick = 0.25;
 static const double kBreak = 4;
@@ -302,17 +303,49 @@ static NSString *LLLineAt(NSDictionary *info, double t) {
 	return LLPiece(line, t);
 }
 
-static NSDictionary *LLOut(NSDictionary *info, NSString *line, NSDictionary *art, double t) {
+static int gLockToken = NOTIFY_TOKEN_INVALID;
+
+// the Dynamic Island flips its artwork on every card, and it only shows while unlocked
+static BOOL LLLocked(void) {
+	uint64_t state = 0;
+	if (gLockToken != NOTIFY_TOKEN_INVALID) notify_get_state(gLockToken, &state);
+	return state || !UIApplication.sharedApplication.protectedDataAvailable;
+}
+
+static BOOL LLFull(void) { return LLOn(@"lyrics") && LLOn(@"full") && LLTallKey() && LLLocked(); }
+
+static id LLCardAt(NSDictionary *info, double t) {
+	NSMutableArray<LLLine *> *lines = [NSMutableArray array];
+	for (LLLine *l in LLLines(info))
+		if (LLJoin(l.words).length) [lines addObject:l];
+	NSInteger n = lines.count, i = -1, brk = -1;
+	if (!n) return nil;
+	double sungTo = 0, from = 0;
+	for (NSInteger j = 0; j < n; j++) {
+		if (lines[j].start <= t) i = j;
+		if (brk < 0 && t >= sungTo && t < lines[j].start && lines[j].start - sungTo >= 5) brk = j, from = sungTo;
+		sungTo = MAX(sungTo, lines[j].end);
+	}
+	NSString *(^text)(NSInteger) = ^NSString *(NSInteger k) { return k >= 0 && k < n ? LLJoin(lines[k].words) : @""; };
+	if (i + 1 < n) LLCard(info, text(i + 1), text(i + 2), -1, NO);
+	if (brk >= 0) return LLCard(info, nil, text(brk), MIN((NSInteger)((t - from) * 6 / (lines[brk].start - from)), 6), YES);
+	if (i < 0 || (i == n - 1 && t > lines[i].end + 2.5)) return LLCard(info, nil, @"", -1, YES);
+	return LLCard(info, text(i), text(i + 1), -1, YES);
+}
+
+static NSDictionary *LLOut(NSDictionary *info, NSString *line, NSDictionary *art, id card, double t) {
 	NSMutableDictionary *d = [info mutableCopy];
 	d[MPNowPlayingInfoPropertyElapsedPlaybackTime] = @(t);
 	if (line) d[MPMediaItemPropertyArtist] = line;
 	[d addEntriesFromDictionary:art];
+	LLCardInto(d, card);
 	return d;
 }
 
 #pragma mark - Hooks
 
 static __weak NSDictionary *gShownArt;
+static id gShownCard;
 
 void LLSend(BOOL force) {
 	NSDictionary *info;
@@ -323,13 +356,16 @@ void LLSend(BOOL force) {
 	}
 	if (!info[MPNowPlayingInfoPropertyElapsedPlaybackTime]) return;
 	double t = LLElapsed(info, at, CACurrentMediaTime());
-	NSString *line = LLLineAt(info, t);
+	BOOL full = LLFull();
+	id card = full ? LLCardAt(info, t) : nil;
+	NSString *line = full ? nil : LLLineAt(info, t);
 	NSDictionary *art = LLArtFor(info);
-	if (!force && art == gShownArt && (line == gShown || [line isEqualToString:gShown])) return;
+	if (!force && art == gShownArt && card == gShownCard && (line == gShown || [line isEqualToString:gShown])) return;
 	gShown = line;
 	gShownArt = art;
+	gShownCard = card;
 	// straight to MediaPlayer: RL/Meanings wrap us and must not see the line as the artist
-	orig_setInfo(MPNowPlayingInfoCenter.defaultCenter, @selector(setNowPlayingInfo:), LLOut(info, line, art, t));
+	orig_setInfo(MPNowPlayingInfoCenter.defaultCenter, @selector(setNowPlayingInfo:), LLOut(info, line, art, card, t));
 }
 
 static void LLTick(void) { LLSend(NO); }
@@ -355,6 +391,7 @@ static void hook_setInfo(MPNowPlayingInfoCenter *self, SEL _cmd, NSDictionary *i
 		dispatch_async(dispatch_get_main_queue(), ^{
 			gShown = nil;
 			gShownArt = nil;
+			gShownCard = nil;
 			LLSetTicking(playing);
 			LLTick();
 		});
@@ -362,10 +399,7 @@ static void hook_setInfo(MPNowPlayingInfoCenter *self, SEL _cmd, NSDictionary *i
 		return;
 	}
 	LLSetTicking(playing);
-	double t = LLElapsed(info, now, now);
-	gShown = LLLineAt(info, t);
-	gShownArt = LLArtFor(info);
-	orig_setInfo(self, _cmd, LLOut(info, gShown, gShownArt, t));
+	LLSend(YES);
 }
 
 static NSDictionary *hook_getInfo(MPNowPlayingInfoCenter *self, SEL _cmd) {
@@ -399,6 +433,15 @@ __attribute__((constructor)) static void LLInit(void) {
 	Method m = class_getInstanceMethod(s, sel);
 	if (m && class_addMethod(s, sel, (IMP)hook_dataTask, method_getTypeEncoding(m))) orig_dataTask = (void *)method_getImplementation(m);
 	else if (m) orig_dataTask = (void *)method_setImplementation(m, (IMP)hook_dataTask);
+	notify_register_dispatch("com.apple.springboard.lockstate", &gLockToken, dispatch_get_main_queue(), ^(int token) {
+		LLLog(@"lock state %d", LLLocked());
+		LLSend(YES);
+	});
+	for (NSString *n in @[ UIApplicationProtectedDataWillBecomeUnavailable, UIApplicationProtectedDataDidBecomeAvailable ])
+		[NSNotificationCenter.defaultCenter addObserverForName:n object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+			LLLog(@"%@, locked %d", note.name, LLLocked());
+			LLSend(YES);
+		}];
 	LLSettingsInit();
 	LLLog(@"loaded");
 }

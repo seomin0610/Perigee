@@ -1,5 +1,6 @@
 #import "LL.h"
 #import <AVFoundation/AVFoundation.h>
+#import <CoreImage/CoreImage.h>
 #import <dlfcn.h>
 
 @interface NSObject (LLAnimatedArtwork)
@@ -35,7 +36,10 @@ unsigned long long LLArtCacheBytes(void) {
 	return n;
 }
 
+static NSString *gCardTitle;
+
 void LLArtReset(BOOL files) {
+	gCardTitle = nil;
 	[gArt removeAllObjects];
 	[gSeen removeAllObjects];
 	if (files) dispatch_async(gQueue ?: dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ [NSFileManager.defaultManager removeItemAtURL:LLCacheDir() error:nil]; });
@@ -246,10 +250,9 @@ static UIImage *LLFirstFrame(NSURL *url) {
 }
 
 static id LLAnimated(NSString *artId, NSURL *file) {
-	UIImage *preview = file ? LLFirstFrame(file) : nil;
-	if (!preview) return nil;
+	if (!file || !LLFirstFrame(file)) return nil;
 	return [[NSClassFromString(@"MPMediaItemAnimatedArtwork") alloc] initWithArtworkID:artId
-		previewImageRequestHandler:^(CGSize size, void (^completion)(UIImage *)) { completion(preview); }
+		previewImageRequestHandler:^(CGSize size, void (^completion)(UIImage *)) { completion(LLFirstFrame(file)); }
 		videoAssetFileURLRequestHandler:^(CGSize size, void (^completion)(NSURL *)) { completion(file); }];
 }
 
@@ -309,4 +312,202 @@ NSDictionary *LLArtFor(NSDictionary *info) {
 	NSString *album = info[MPMediaItemPropertyAlbumTitle], *artist = info[MPMediaItemPropertyArtist];
 	dispatch_async(gQueue, ^{ LLResolve(title, track, album, artist); });
 	return nil;
+}
+
+#pragma mark - Full-screen lyrics
+
+static NSMutableDictionary<NSString *, id> *gCards;
+static dispatch_queue_t gCardQueue;
+static NSUInteger gCardGen;
+static id gCardShown, gCardSquare;
+static BOOL gSquareAsked;
+static NSString *gTallKey, *gSquareKey;
+
+static void LLKeys(void) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		NSArray *supported = [MPNowPlayingInfoCenter respondsToSelector:@selector(supportedAnimatedArtworkKeys)] ? [MPNowPlayingInfoCenter performSelector:@selector(supportedAnimatedArtworkKeys)] : @[];
+		NSString *tall = LLArtKey("MPNowPlayingInfoProperty3x4AnimatedArtwork"), *square = LLArtKey("MPNowPlayingInfoProperty1x1AnimatedArtwork");
+		gTallKey = tall && [supported containsObject:tall] ? tall : nil;
+		gSquareKey = square && [supported containsObject:square] ? square : nil;
+	});
+}
+
+NSString *LLTallKey(void) {
+	LLKeys();
+	return gTallKey;
+}
+
+// a fixed square artwork per track, or the Dynamic Island redoes its artwork flip on every new card
+void LLCardInto(NSMutableDictionary *d, id card) {
+	if (!card) return;
+	d[gTallKey] = card;
+	if (gSquareKey && !d[gSquareKey] && gCardSquare) d[gSquareKey] = gCardSquare;
+}
+
+static NSURL *LLCardDir(void) { return [LLCacheDir() URLByAppendingPathComponent:@"cards"]; }
+
+static UIImage *LLBlurred(UIImage *cover) {
+	if (!cover.CGImage) return nil;
+	static CIContext *ctx;
+	if (!ctx) ctx = [CIContext contextWithOptions:@{ kCIContextUseSoftwareRenderer: @YES }];
+	CIImage *img = [CIImage imageWithCGImage:cover.CGImage];
+	CIImage *out = [[[[img imageByClampingToExtent] imageByApplyingGaussianBlurWithSigma:img.extent.size.width / 5]
+		imageByApplyingFilter:@"CIColorControls" withInputParameters:@{ kCIInputSaturationKey: @1.4 }]
+		imageByApplyingFilter:@"CIExposureAdjust" withInputParameters:@{ kCIInputEVKey: @-1.2 }];
+	CGImageRef cg = [ctx createCGImage:out fromRect:img.extent];
+	UIImage *u = cg ? [UIImage imageWithCGImage:cg] : nil;
+	CGImageRelease(cg);
+	return u;
+}
+
+static void LLDrawCard(CGSize size, UIImage *backdrop, NSString *now, NSString *next, NSInteger dots) {
+	[UIColor.blackColor setFill];
+	UIRectFill((CGRect){ CGPointZero, size });
+	if (backdrop) {
+		CGFloat s = MAX(size.width / backdrop.size.width, size.height / backdrop.size.height);
+		CGSize d = CGSizeMake(backdrop.size.width * s, backdrop.size.height * s);
+		[backdrop drawInRect:CGRectMake((size.width - d.width) / 2, (size.height - d.height) / 2, d.width, d.height)];
+	}
+	if (!now && dots < 0) return;
+	CGFloat margin = size.width * 0.08;
+	CGSize box = CGSizeMake(size.width - 2 * margin, CGFLOAT_MAX);
+	NSMutableParagraphStyle *para = [NSMutableParagraphStyle new];
+	para.lineBreakMode = NSLineBreakByWordWrapping;
+	para.lineBreakStrategy = NSLineBreakStrategyStandard;
+	NSAttributedString *(^text)(NSString *, CGFloat, UIFontWeight, CGFloat) = ^(NSString *s, CGFloat pt, UIFontWeight weight, CGFloat alpha) {
+		return [[NSAttributedString alloc] initWithString:s ?: @"" attributes:@{ NSFontAttributeName: [UIFont systemFontOfSize:pt weight:weight], NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:alpha], NSKernAttributeName: @(-0.02 * pt), NSParagraphStyleAttributeName: para }];
+	};
+	NSAttributedString *big, *small;
+	CGFloat font = size.width * 0.09, bh, sh, gap;
+	for (;; font *= 0.9) {
+		big = text(now, font, UIFontWeightBold, 1);
+		small = text(next, font * 0.6, UIFontWeightSemibold, 0.45);
+		bh = dots >= 0 ? round(font * 1.235) : now.length ? ceil([big boundingRectWithSize:box options:NSStringDrawingUsesLineFragmentOrigin context:nil].size.height) : 0;
+		sh = next.length ? ceil([small boundingRectWithSize:box options:NSStringDrawingUsesLineFragmentOrigin context:nil].size.height) : 0;
+		gap = bh && sh ? font * 0.5 : 0;
+		if (bh + gap + sh <= size.height * 0.7 || font < size.width * 0.04) break;
+	}
+	// the lock screen fits the clip to its width, clock over the top and controls over the bottom
+	CGFloat y = size.height * 0.55 - (bh + gap + sh) / 2;
+	if (dots >= 0) {
+		CGFloat d = round(font * 0.42), step = d + round(d * 0.6);
+		for (NSInteger k = 0; k < 3; k++) {
+			[[UIColor colorWithWhite:1 alpha:0.3 + 0.7 * MAX(0, MIN(1, dots / 2.0 - k))] setFill];
+			[[UIBezierPath bezierPathWithOvalInRect:CGRectMake(margin + k * step, y + (bh - d) / 2, d, d)] fill];
+		}
+	} else
+		[big drawWithRect:CGRectMake(margin, y, box.width, bh) options:NSStringDrawingUsesLineFragmentOrigin context:nil];
+	[small drawWithRect:CGRectMake(margin, y + bh + gap, box.width, sh) options:NSStringDrawingUsesLineFragmentOrigin context:nil];
+}
+
+static NSURL *LLStill(size_t W, size_t H, void (^draw)(CGSize size)) {
+	CVPixelBufferRef pb = NULL;
+	NSDictionary *attrs = @{ (id)kCVPixelBufferCGImageCompatibilityKey: @YES, (id)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES };
+	if (CVPixelBufferCreate(NULL, W, H, kCVPixelFormatType_32BGRA, (__bridge CFDictionaryRef)attrs, &pb) != kCVReturnSuccess) return nil;
+	CVPixelBufferLockBaseAddress(pb, 0);
+	CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx = CGBitmapContextCreate(CVPixelBufferGetBaseAddress(pb), W, H, 8, CVPixelBufferGetBytesPerRow(pb), cs, kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+	CGColorSpaceRelease(cs);
+	CGContextTranslateCTM(ctx, 0, H);
+	CGContextScaleCTM(ctx, 1, -1);
+	UIGraphicsPushContext(ctx);
+	draw(CGSizeMake(W, H));
+	UIGraphicsPopContext();
+	CGContextRelease(ctx);
+	CVPixelBufferUnlockBaseAddress(pb, 0);
+
+	NSFileManager *fm = NSFileManager.defaultManager;
+	[fm createDirectoryAtURL:LLCardDir() withIntermediateDirectories:YES attributes:nil error:nil];
+	NSURL *dst = [LLCardDir() URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingString:@".mp4"]];
+	NSURL *tmp = [dst URLByAppendingPathExtension:@"part.mp4"];
+	AVAssetWriter *w = [AVAssetWriter assetWriterWithURL:tmp fileType:AVFileTypeMPEG4 error:nil];
+	AVAssetWriterInput *in = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:@{ AVVideoCodecKey: AVVideoCodecTypeH264, AVVideoWidthKey: @(W), AVVideoHeightKey: @(H) }];
+	AVAssetWriterInputPixelBufferAdaptor *ad = [AVAssetWriterInputPixelBufferAdaptor assetWriterInputPixelBufferAdaptorWithAssetWriterInput:in sourcePixelBufferAttributes:nil];
+	BOOL ok = [w canAddInput:in];
+	if (ok) {
+		[w addInput:in];
+		ok = [w startWriting];
+	}
+	if (ok) {
+		[w startSessionAtSourceTime:kCMTimeZero];
+		for (int s = 0; ok && s < 2; s++) {
+			while (!in.readyForMoreMediaData && w.status == AVAssetWriterStatusWriting) usleep(2000);
+			ok = [ad appendPixelBuffer:pb withPresentationTime:CMTimeMake(s, 1)];
+		}
+		if (w.status == AVAssetWriterStatusWriting) {
+			[in markAsFinished];
+			[w endSessionAtSourceTime:CMTimeMake(2, 1)];
+			dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+			[w finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(sem); }];
+			dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+		}
+		ok = ok && w.status == AVAssetWriterStatusCompleted && [fm moveItemAtURL:tmp toURL:dst error:nil];
+	}
+	CVPixelBufferRelease(pb);
+	if (!ok) {
+		LLLog(@"lyrics card failed: %@", w.error);
+		[fm removeItemAtURL:tmp error:nil];
+	}
+	return ok ? dst : nil;
+}
+
+static void LLRender(NSUInteger gen, void (^draw)(CGSize size), size_t W, size_t H, void (^done)(id art)) {
+	dispatch_async(gCardQueue, ^{
+		NSURL *file = LLStill(W, H, draw);
+		id art = LLAnimated([@"card-" stringByAppendingString:file.lastPathComponent ?: @""], file);
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if (gen == gCardGen) done(art);
+		});
+	});
+}
+
+id LLCard(NSDictionary *info, NSString *now, NSString *next, NSInteger dots, BOOL shown) {
+	NSString *title = info[MPMediaItemPropertyTitle];
+	MPMediaItemArtwork *artwork = LLAs(info[MPMediaItemPropertyArtwork], MPMediaItemArtwork.class);
+	if (!gCards) {
+		gCards = [NSMutableDictionary dictionary];
+		gCardQueue = dispatch_queue_create("TidalLockLyrics.card", DISPATCH_QUEUE_SERIAL);
+	}
+	if (![title isEqualToString:gCardTitle]) {
+		gCardTitle = title;
+		gCardShown = gCardSquare = nil;
+		gSquareAsked = NO;
+		[gCards removeAllObjects];
+		gCardGen++;
+		dispatch_async(gCardQueue, ^{ [NSFileManager.defaultManager removeItemAtURL:LLCardDir() error:nil]; });
+	}
+	NSUInteger gen = gCardGen;
+	if (!gSquareAsked && gSquareKey) {
+		UIImage *cover = [artwork imageWithSize:CGSizeMake(600, 600)];
+		if (cover) {
+			gSquareAsked = YES;
+			LLRender(gen, ^(CGSize s) { [cover drawInRect:(CGRect){ CGPointZero, s }]; }, 600, 600, ^(id art) {
+				gCardSquare = art;
+				if (art) LLSend(YES);
+			});
+		}
+	}
+	NSString *key = [NSString stringWithFormat:@"%ld\n%@\n%@", (long)dots, now ?: @"\x01", next];
+	id card = gCards[key];
+	if (!card) {
+		gCards[key] = NSNull.null;
+		BOOL plain = !now && dots < 0;
+		UIImage *cover = [artwork imageWithSize:plain ? CGSizeMake(1280, 1280) : CGSizeMake(200, 200)];
+		LLRender(gen, ^(CGSize s) {
+			static NSUInteger blurGen;
+			static UIImage *blurred;
+			if (!plain && (blurGen != gen || (!blurred && cover))) {
+				blurGen = gen;
+				blurred = LLBlurred(cover);
+			}
+			LLDrawCard(s, plain ? cover : blurred, now, next, dots);
+		}, 960, 1280, ^(id art) {
+			gCards[key] = art ?: NSNull.null;
+			if (art) LLSend(NO);
+		});
+	}
+	if (card == NSNull.null) card = nil;
+	if (shown && card) gCardShown = card;
+	return shown ? gCardShown : card;
 }

@@ -21,7 +21,7 @@ static NSString *LLL(NSString *en, NSString *ko) {
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 
 - (NSArray<NSString *> *)keysIn:(NSInteger)section {
-	if (section == 0) return @[ @"lyrics" ];
+	if (section == 0) return LLOn(@"lyrics") && LLArtAvailable() ? @[ @"lyrics", @"full" ] : @[ @"lyrics" ];
 	if (section == 1) return LLOn(@"art") && LLArtAvailable() ? @[ @"art", @"artTidal", @"artApple" ] : @[ @"art" ];
 	return @[ @"cache" ];
 }
@@ -30,8 +30,8 @@ static NSString *LLL(NSString *en, NSString *ko) {
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return [self keysIn:s].count; }
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
-	if (s == 0) return LLL(@"The line being sung shows in place of the artist on the lock screen and in Control Center. Lyrics from Radiant Lyrics, then TIDAL, then LRCLIB.",
-	                       @"부르는 중인 가사 줄이 잠금화면과 제어센터의 아티스트 자리에 떠요. 가사는 Radiant Lyrics → TIDAL → LRCLIB 순서로 찾아요.");
+	if (s == 0) return LLL(@"The line being sung shows in place of the artist on the lock screen and in Control Center. Lyrics from Radiant Lyrics, then TIDAL, then LRCLIB. Full-Screen Lyrics draws them over the whole lock screen instead.",
+	                       @"부르는 중인 가사 줄이 잠금화면과 제어센터의 아티스트 자리에 떠요. 가사는 Radiant Lyrics → TIDAL → LRCLIB 순서로 찾아요. 전체화면 가사를 켜면 아티스트 자리 대신 잠금화면 전체에 그려요.");
 	if (s == 1) return LLArtAvailable() ? LLL(@"The album's moving cover plays on the lock screen. TIDAL's own video cover first, then Apple Music's motion cover.",
 	                                          @"앨범의 움직이는 커버가 잠금화면에 재생돼요. TIDAL 영상 커버를 먼저, 없으면 Apple Music 모션 커버를 써요.")
 	                                    : LLL(@"Needs iOS 26 or later.", @"iOS 26 이상이 필요해요.");
@@ -49,13 +49,14 @@ static NSString *LLL(NSString *en, NSString *ko) {
 	}
 	NSDictionary *names = @{
 		@"lyrics": LLL(@"Lock Screen Lyrics", @"잠금화면 가사"),
+		@"full": LLL(@"Full-Screen Lyrics", @"전체화면 가사"),
 		@"art": LLL(@"Animated Artwork", @"애니메이션 아트워크"),
 		@"artTidal": LLL(@"TIDAL Video Covers", @"TIDAL 영상 커버"),
 		@"artApple": LLL(@"Apple Music Motion Covers", @"Apple Music 모션 커버"),
 	};
 	cell.textLabel.text = names[key];
 	cell.selectionStyle = UITableViewCellSelectionStyleNone;
-	if ([key hasPrefix:@"art"] && ![key isEqualToString:@"art"]) cell.indentationLevel = 1;
+	if (([key hasPrefix:@"art"] && ![key isEqualToString:@"art"]) || [key isEqualToString:@"full"]) cell.indentationLevel = 1;
 	UISwitch *sw = [UISwitch new];
 	sw.on = LLOn(key);
 	sw.enabled = ![key hasPrefix:@"art"] || LLArtAvailable();
@@ -70,6 +71,7 @@ static NSString *LLL(NSString *en, NSString *ko) {
 	[NSUserDefaults.standardUserDefaults setBool:sw.on forKey:[@"ll." stringByAppendingString:key]];
 	if ([key hasPrefix:@"art"]) LLArtReset(NO);
 	LLSend(YES);
+	if ([key isEqualToString:@"lyrics"]) [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:0] withRowAnimation:UITableViewRowAnimationAutomatic];
 	if ([key isEqualToString:@"art"]) [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
 }
 
@@ -90,10 +92,14 @@ static NSString *LLL(NSString *en, NSString *ko) {
 	};
 	BOOL (^artShown)(void) = ^BOOL { return LLOn(@"art") && LLArtAvailable(); };
 	return @[
-		@{ @"items": @[ @{ @"type": @"switch", @"key": @"ll.lyrics", @"default": @YES, @"title": LLL(@"Lock Screen Lyrics", @"잠금화면 가사"),
-		                   @"set": ^(id v) { LLSend(YES); } } ],
-		   @"footer": LLL(@"The line being sung shows in place of the artist on the lock screen and in Control Center. Lyrics from Radiant Lyrics, then TIDAL, then LRCLIB.",
-		                  @"부르는 중인 가사 줄이 잠금화면과 제어센터의 아티스트 자리에 떠요. 가사는 Radiant Lyrics → TIDAL → LRCLIB 순서로 찾아요.") },
+		@{ @"items": @[
+			   @{ @"type": @"switch", @"key": @"ll.lyrics", @"default": @YES, @"title": LLL(@"Lock Screen Lyrics", @"잠금화면 가사"),
+			      @"set": ^(id v) { LLSend(YES); } },
+			   @{ @"type": @"switch", @"key": @"ll.full", @"default": @NO, @"title": LLL(@"Full-Screen Lyrics", @"전체화면 가사"),
+			      @"indent": @YES, @"visible": ^BOOL { return LLOn(@"lyrics") && LLArtAvailable(); }, @"set": ^(id v) { LLSend(YES); } },
+		   ],
+		   @"footer": LLL(@"The line being sung shows in place of the artist on the lock screen and in Control Center. Lyrics from Radiant Lyrics, then TIDAL, then LRCLIB. Full-Screen Lyrics draws them over the whole lock screen instead.",
+		                  @"부르는 중인 가사 줄이 잠금화면과 제어센터의 아티스트 자리에 떠요. 가사는 Radiant Lyrics → TIDAL → LRCLIB 순서로 찾아요. 전체화면 가사를 켜면 아티스트 자리 대신 잠금화면 전체에 그려요.") },
 		@{ @"items": @[
 			   @{ @"type": @"switch", @"key": @"ll.art", @"default": @YES, @"title": LLL(@"Animated Artwork", @"애니메이션 아트워크"), @"set": art,
 			      @"enabled": ^BOOL { return LLArtAvailable(); } },
