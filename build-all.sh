@@ -1,5 +1,5 @@
 #!/bin/sh
-# Order = load order: TidalLockLyrics must hook setNowPlayingInfo: first, TidalHaptics after it.
+# Order = load order: TidalLockLyrics must hook setNowPlayingInfo: first, TidalHaptics after it; TidalKaraoke before TidalLoudness (audio stages run in load order).
 set -e
 cd "$(dirname "$0")"
 
@@ -24,6 +24,7 @@ external/RadiantTidal/RadiantTidal.dylib
 src/Meanings/TidalMeanings.dylib
 src/KoreanSearch/TidalKoreanSearch.dylib
 src/Offline/TidalOffline.dylib
+src/Karaoke/TidalKaraoke.dylib
 src/Loudness/TidalLoudness.dylib
 src/LiquidTab/TidalLiquidTab.dylib
 src/Haptics/TidalHaptics.dylib

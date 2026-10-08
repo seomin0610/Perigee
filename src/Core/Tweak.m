@@ -48,6 +48,8 @@ static NSArray<NSArray *> *TTTweaks(void) {
 		   @"Pick v1 or v2 for each download", @"다운로드할 때 v1·v2 선택", @NO ],
 		@[ @"TidalLoudness", @"Even Volume", @"곡 간 볼륨 맞춤", @"LDSettings", @"speaker.wave.2", @YES,
 		   @"Same volume from song to song", @"곡마다 같은 볼륨으로", @NO ],
+		@[ @"TidalKaraoke", @"Karaoke", @"노래방", @"KRSettings", @"music.mic", @YES,
+		   @"Turns the vocals down", @"보컬을 줄여 MR처럼", @NO ],
 		@[ @"TidalSideloadFix", @"Sideload Fix", @"사이드로드 수정", @"", @"key", @NO, // login breaks without it
 		   @"Keeps you signed in after sideloading", @"사이드로드해도 로그인 유지", @YES ],
 	];

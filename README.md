@@ -12,6 +12,7 @@ Perigee for TIDAL
 | [Privacy](src/Privacy) | Blocks TIDAL's trackers |
 | [Offline](src/Offline) | Download offline tracks from v1 playbackinfo instead of v2 trackManifests |
 | [Loudness](src/Loudness) | Same volume from song to song (TIDAL normalizes by album) |
+| [Karaoke](src/Karaoke) | Turns the vocals down, like a karaoke track |
 | [SideloadFix](src/SideloadFix) | Stay logged in after sideloading (always include it) |
 | [RadiantTidal](external/RadiantTidal) | Radiant Lyrics (submodule, GPL-3.0) |
 
