@@ -59,7 +59,7 @@ for d in $dylibs; do
 	echo '{ Filter = { Bundles = ( "com.aspiro.TIDAL" ); }; }' >"$lib/${1}_$n.plist"
 	shift
 done
-case $TT_BUILD in [0-9]*) v=$TT_BUILD ;; *) v=0~$TT_BUILD ;; esac
+case $TT_BUILD in [0-9]*) v=$TT_BUILD ;; *) v=0~$(printf %s "$TT_BUILD" | tr _ +) ;; esac
 cat >"$tmp/deb/DEBIAN/control" <<EOF
 Package: com.seomin0610.perigee
 Name: Perigee
