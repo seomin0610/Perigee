@@ -21,23 +21,41 @@ void KRSubtract(KRDSP *d, float **p, unsigned stride, size_t frames, const float
 typedef struct {
 	float ring[KR_PITCH_N], acc;
 	unsigned pos, count, decim, accn, hop, tmin, tmax;
+	float threshold;
 	double rate;
 } KRPitch;
 
 void KRPitchInit(KRPitch *p, double rate);
-int KRPitchPush(KRPitch *p, float x, float gate, float *note);
+int KRPitchPush(KRPitch *p, float x, float gate, float *note, float *alt, float *dip);
 double KRPitchDelay(const KRPitch *p);
 int KRGrade(float user, float ref);
 
 typedef struct {
 	double time;
-	float note;
+	float note, alt[2], dip;
 } KRFrame;
+
+typedef struct {
+	KRFrame run[8];
+	unsigned n, open;
+	float last;
+} KRClean;
+
+size_t KRCleanPush(KRClean *c, KRFrame f, KRFrame *out);
+
+typedef struct {
+	KRFrame win[5];
+	float hist[16];
+	unsigned n, hn, hpos, fixed;
+} KRSmooth;
+
+int KRSmoothPush(KRSmooth *s, KRFrame f, KRFrame *out);
 
 typedef struct {
 	KRFrame refs[128];
 	unsigned count, pos, since;
-	double lag;
+	double lag, leapAt;
+	float prev;
 } KRLag;
 
 int KRMatch(KRLag *l, const KRFrame *mic, size_t n, KRFrame ref, double window, float *user);
@@ -47,7 +65,8 @@ enum { KRPhraseEnded = 1, KRVibrato = 2, KRLongTone = 4 };
 typedef struct {
 	unsigned grades[5], phrases, cleared, onsets, vibratos, longTones;
 	double rhythm, phraseRate;
-	unsigned pFrames, refGap, micGap, userCount, holdN, holdMiss;
+	unsigned pFrames, refGap, micGap, micSince, userCount, holdN, holdMiss;
+	float micLast;
 	double pSum, pLast, userOn[64], holdStart, holdEnd, holdRef;
 	float hold[160];
 } KRTally;
