@@ -23,13 +23,14 @@ int main(void) {
 	for (size_t i = 0; i < n; i += 512) LDDSPRun(&d, p, 2, n - i < 512 ? n - i : 512, 1), p[0] += 1024, p[1] += 1024;
 	float top = 0;
 	for (size_t i = 0; i < n * 2; i++) top = fmaxf(top, fabsf(pcm[i]));
-	assert(top <= d.ceiling * 1.00001f);
+	assert(top <= d.ceiling * 1.00001f && d.squeeze < 0.5f);
 	LDDSPFree(&d);
 
 	assert(LDDSPInit(&d, 44100, 1, 2));
 	float *q = in;
 	for (size_t i = 0; i < n; i++) q[i] = 0.1f * sinf(i * 0.05f);
 	LDDSPRun(&d, &q, 1, n, 0);
+	assert(d.squeeze == 1);
 	for (size_t i = d.len - 1; i < n; i++) assert(fabsf(q[i] - 0.2f * sinf((i - d.len + 1) * 0.05f)) < 1e-5f);
 	LDDSPFree(&d);
 

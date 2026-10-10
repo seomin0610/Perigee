@@ -9,6 +9,7 @@
 static NSString *const kOffset = @"ld.offset";
 static NSString *const kBoost = @"ld.boost";
 static NSString *const kEQ = @"ld.eq";
+static NSString *const kCompare = @"ld.compare";
 static const double kTidalPreAmp = 4, kMaxGain = 4, kTargetLufs = -14;
 static NSCache<NSString *, NSNumber *> *gBoost;
 
@@ -59,12 +60,14 @@ static NSData *LDRewrite(NSData *body, BOOL v1) {
 #pragma mark - Tap
 
 static _Atomic(float) gVolume = 1;
-static _Atomic(bool) gEQ = true;
+static _Atomic(bool) gEQ = true, gCompare;
+static _Atomic(float) gNowGain = 1, gNowBass, gNowTreble, gNowLift = 1, gSqueeze = 1;
+static _Atomic(double) gNowAt;
 
 typedef struct {
 	LDDSP dsp;
 	float target, eqVolume;
-	BOOL logged;
+	BOOL logged, compared;
 } LDTap;
 
 @interface LDVolume : NSObject
@@ -117,7 +120,28 @@ static void LDProcess(void *ctx, float **p, unsigned stride, size_t frames, BOOL
 			LDLog(@"tap: x%.2f, EQ %@ at volume %.2f (bass %+.1f, treble %+.1f, lift %+.1f dB)", gain, eq ? @"on" : @"off", vol, bass, treble, lift);
 		});
 	}
+	atomic_store(&gNowAt, CFAbsoluteTimeGetCurrent());
+	atomic_store(&gNowGain, t->dsp.gain);
+	atomic_store(&gNowBass, eq ? t->dsp.bassDb : 0);
+	atomic_store(&gNowTreble, eq ? t->dsp.trebleDb : 0);
+	atomic_store(&gNowLift, eq ? t->dsp.lift : 1);
+	if (atomic_load(&gCompare)) return (void)(t->compared = YES);
+	if (t->compared) LDDSPReset(&t->dsp), t->compared = NO;
 	LDDSPRun(&t->dsp, p, stride, frames, eq);
+	if (t->dsp.squeeze < atomic_load(&gSqueeze)) atomic_store(&gSqueeze, t->dsp.squeeze);
+	t->dsp.squeeze = 1;
+}
+
+static NSString *LDStatus(void) {
+	if (CFAbsoluteTimeGetCurrent() - atomic_load(&gNowAt) > 2)
+		return LDL(@"Nothing playing through Perigee's audio. TIDAL's own stream (no Secondary Login) is only turned down.",
+		           @"Perigee 오디오로 재생 중인 곡이 없어요. TIDAL 스트림(보조 로그인 없음)은 볼륨을 줄이기만 해요.");
+	float squeeze = 20 * log10f(atomic_exchange(&gSqueeze, 1)), bass = atomic_load(&gNowBass), treble = atomic_load(&gNowTreble);
+	NSMutableString *s = [NSMutableString stringWithFormat:LDL(@"This song %+.1f dB", @"이 곡 %+.1f dB"), 20 * log10f(atomic_load(&gNowGain))];
+	if (squeeze < -0.1f) [s appendFormat:LDL(@" · limiter up to %.1f dB", @" · 리미터 최대 %.1f dB"), squeeze];
+	if (bass > 0.05f || treble > 0.05f)
+		[s appendFormat:LDL(@" · EQ bass %+.1f, treble %+.1f, lift %+.1f dB", @" · EQ 저음 %+.1f, 고음 %+.1f, 전체 %+.1f dB"), bass, treble, 20 * log10f(atomic_load(&gNowLift))];
+	return s;
 }
 
 #pragma mark - Hooks
@@ -151,6 +175,11 @@ static void LDSwap(Class c, SEL sel, IMP imp, void *orig) {
 @implementation LDSettings
 + (NSArray *)ttSections {
 	return @[
+		@{ @"header": LDL(@"Now playing", @"지금 곡"),
+		   @"items": @[ @{ @"type": @"switch", @"key": kCompare, @"default": @NO, @"title": LDL(@"Play original", @"원음으로 듣기"), @"detail": LDStatus(),
+		                   @"set": ^(id v) { atomic_store(&gCompare, [v boolValue]); } } ],
+		   @"footer": LDL(@"Turns this tweak off for the song that's playing, right away, so you can hear the difference. Off again when TIDAL restarts.",
+		                  @"지금 곡에서 바로 맞춤을 끄고 원래 소리로 들려줘요. 껐다 켜며 차이를 비교해 보세요. TIDAL을 다시 열면 꺼져요.") },
 		@{ @"items": @[
 			   @{ @"type": @"switch", @"key": kBoost, @"default": @YES, @"title": LDL(@"Raise quiet songs", @"조용한 곡 키우기"),
 			      @"detail": LDL(@"Plays the DRM-free stream from Secondary Login", @"보조 로그인으로 DRM 없는 스트림 재생") },
@@ -172,6 +201,7 @@ static void LDSwap(Class c, SEL sel, IMP imp, void *orig) {
 
 __attribute__((constructor)) static void LDInit(void) {
 	if (NSClassFromString(@"TTCore") && ![NSUserDefaults.standardUserDefaults boolForKey:@"tt.TidalLoudness.enabled"]) return LDLog(@"turned off in TidalCore's settings");
+	[NSUserDefaults.standardUserDefaults removeObjectForKey:kCompare];
 	id eq = [NSUserDefaults.standardUserDefaults objectForKey:kEQ];
 	atomic_store(&gEQ, eq ? [eq boolValue] : YES);
 	gBoost = [NSCache new];

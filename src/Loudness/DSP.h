@@ -4,7 +4,7 @@
 #define LD_MAXCH 8
 
 typedef struct {
-	float gain, rel, release, ceiling, lift, liftNow, bassDb, trebleDb;
+	float gain, rel, release, ceiling, lift, liftNow, bassDb, trebleDb, squeeze;
 	unsigned ch, len, pos, head, count;
 	uint64_t n;
 	double rate, sum;

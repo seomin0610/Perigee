@@ -48,7 +48,7 @@ void LDDSPReset(LDDSP *d) {
 	memset(d->delay, 0, sizeof(float) * d->len * d->ch);
 	for (unsigned i = 0; i < d->len; i++) d->hold[i] = 1;
 	memset(d->z, 0, sizeof d->z);
-	d->sum = d->len, d->rel = 1, d->pos = d->head = d->count = 0, d->n = 0;
+	d->sum = d->len, d->rel = 1, d->squeeze = 1, d->pos = d->head = d->count = 0, d->n = 0;
 }
 
 // volume: iOS output volume 0-1; target: LUFS the songs are brought to
@@ -83,6 +83,7 @@ void LDDSPRun(LDDSP *d, float **p, unsigned stride, size_t frames, int eq) {
 		d->sum += d->rel - d->hold[d->pos];
 		d->hold[d->pos] = d->rel;
 		float s = d->sum / d->len;
+		d->squeeze = fminf(d->squeeze, s);
 		unsigned next = (d->pos + 1) % d->len;
 		for (unsigned c = 0; c < d->ch; c++) {
 			d->delay[d->pos * d->ch + c] = x[c];
