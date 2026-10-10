@@ -10,7 +10,8 @@ enum { kMaxStages = 4, kMaxChannels = 8 };
 static NSString *const kHandled = @"TTAudioHandled";
 static TTAudioStage gStages[kMaxStages];
 static unsigned gCount;
-static NSCache<NSString *, NSNumber *> *gV1;
+// not NSCache: it empties when the screen turns off
+static NSMutableDictionary<NSString *, NSNumber *> *gV1;
 static char kURIKey, kTrackKey;
 
 static void TTALog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
@@ -103,6 +104,13 @@ static NSArray<NSURL *> *TTAParts(NSData *mpd) {
 	return parts;
 }
 
+static NSArray<NSURL *> *TTABTS(NSData *raw) {
+	NSDictionary *m = TTAAs([NSJSONSerialization JSONObjectWithData:raw options:0 error:nil], NSDictionary.class);
+	NSString *enc = TTAAs(m[@"encryptionType"], NSString.class), *file = TTAAs([TTAAs(m[@"urls"], NSArray.class) firstObject], NSString.class);
+	NSURL *u = file && (!enc || [enc isEqualToString:@"NONE"]) ? [NSURL URLWithString:file] : nil;
+	return u ? @[ u ] : nil;
+}
+
 static NSURL *TTAFolder(void) {
 	NSURL *u = [[NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:@"TidalCore/v1" isDirectory:YES];
 	[NSFileManager.defaultManager createDirectoryAtURL:u withIntermediateDirectories:YES attributes:nil error:nil];
@@ -126,7 +134,9 @@ static NSDictionary *TTAGain(id gain, id peak) {
 
 static NSData *TTAV1Manifest(NSString *track, NSDictionary *info, NSString *uri) {
 	NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
-	[gV1 setObject:@YES forKey:uri];
+	@synchronized (gV1) {
+		gV1[uri] = @YES;
+	}
 	attrs[@"uri"] = uri;
 	NSString *format = @{ @"HI_RES_LOSSLESS": @"FLAC_HIRES", @"LOSSLESS": @"FLAC", @"HIGH": @"AACLC", @"LOW": @"HEAACV1" }[TTAAs(info[@"audioQuality"], NSString.class) ?: @""];
 	if (format) attrs[@"formats"] = @[ format ];
@@ -228,15 +238,15 @@ static NSData *TTAV1Manifest(NSString *track, NSDictionary *info, NSString *uri)
 		[self run:[TTASession() dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
 			NSInteger status = TTAAs(r, NSHTTPURLResponse.class) ? ((NSHTTPURLResponse *)r).statusCode : 0;
 			NSDictionary *info = TTAAs(status == 200 && d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil, NSDictionary.class);
-			NSString *b64 = TTAAs(info[@"manifest"], NSString.class), *quality = TTAAs(info[@"audioQuality"], NSString.class);
-			BOOL dash = [TTAAs(info[@"manifestMimeType"], NSString.class) isEqualToString:@"application/dash+xml"];
-			NSData *raw = dash && b64 ? [[NSData alloc] initWithBase64EncodedString:b64 options:0] : nil;
-			NSArray<NSURL *> *parts = raw ? TTAParts(raw) : nil;
+			NSString *b64 = TTAAs(info[@"manifest"], NSString.class), *quality = TTAAs(info[@"audioQuality"], NSString.class), *mime = TTAAs(info[@"manifestMimeType"], NSString.class);
+			NSData *raw = b64 ? [[NSData alloc] initWithBase64EncodedString:b64 options:0] : nil;
+			NSArray<NSURL *> *parts = !raw ? nil : [mime isEqualToString:@"application/dash+xml"] ? TTAParts(raw) : [mime isEqualToString:@"application/vnd.tidal.bts"] ? TTABTS(raw) : nil;
 			if (!parts || !quality) {
-				TTALog(@"v1 failed for %@ (%ld %@ %@ %@), using TIDAL's stream", track, (long)status, quality, info[@"manifestMimeType"], e.localizedDescription ?: @"");
+				TTALog(@"v1 failed for %@ (%ld %@ %@ %@), using TIDAL's stream", track, (long)status, quality, mime, e.localizedDescription ?: @"");
 				return [self send:orig];
 			}
-			NSURL *dest = [TTAFolder() URLByAppendingPathComponent:[NSString stringWithFormat:@"%@-%@.m4a", track, quality]];
+			NSString *ext = parts.count > 1 ? @"m4a" : parts[0].pathExtension.length ? parts[0].pathExtension : @"mp4";
+			NSURL *dest = [TTAFolder() URLByAppendingPathComponent:[NSString stringWithFormat:@"%@-%@.%@", track, quality, ext]];
 			[self download:parts to:dest done:^(NSURL *file) {
 				if (!file) {
 					TTALog(@"v1 download failed for %@, using TIDAL's stream", track);
@@ -335,7 +345,7 @@ static AVAudioMix *TTAMix(AVPlayerItem *item, AVAudioMix *mix) {
 	if (!uri || !track) return mix;
 	MTAudioProcessingTapCallbacks cb = { kMTAudioProcessingTapCallbacksVersion_0, (__bridge void *)uri, TTATapInit, TTATapFinalize, TTATapPrepare, TTATapUnprepare, TTATapProcess };
 	MTAudioProcessingTapRef tap;
-	if (MTAudioProcessingTapCreate(kCFAllocatorDefault, &cb, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)) return mix;
+	if (MTAudioProcessingTapCreate(kCFAllocatorDefault, &cb, kMTAudioProcessingTapCreationFlag_PreEffects, &tap)) return mix;
 	AVMutableAudioMixInputParameters *p = [mix.inputParameters.firstObject mutableCopy] ?: [AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:track];
 	p.trackID = track.trackID;
 	p.audioTapProcessor = tap;
@@ -348,29 +358,33 @@ static AVAudioMix *TTAMix(AVPlayerItem *item, AVAudioMix *mix) {
 static void (*orig_setAudioMix)(AVPlayerItem *, SEL, AVAudioMix *);
 static void hook_setAudioMix(AVPlayerItem *self, SEL _cmd, AVAudioMix *mix) { orig_setAudioMix(self, _cmd, TTAMix(self, mix)); }
 
-static void TTAAttach(AVPlayerItem *item, int tries) {
-	AVAssetTrack *track;
-	for (AVPlayerItemTrack *t in item.tracks)
-		if ([t.assetTrack.mediaType isEqualToString:AVMediaTypeAudio]) track = t.assetTrack;
-	if (!track) {
-		if (tries >= 40) return TTALog(@"tap: no audio track after 10 s (status %ld)", (long)item.status);
-		__weak AVPlayerItem *weak = item;
-		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-			if (weak) TTAAttach(weak, tries + 1);
+// The next song is queued minutes ahead (a local file counts as fully downloaded), long before AVQueuePlayer opens it,
+// so its item.tracks stay empty: take the track from the file itself.
+static void TTAAttach(AVPlayerItem *item) {
+	__weak AVPlayerItem *weak = item;
+	[item.asset loadTracksWithMediaType:AVMediaTypeAudio completionHandler:^(NSArray<AVAssetTrack *> *tracks, NSError *e) {
+		AVAssetTrack *track = tracks.firstObject;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			AVPlayerItem *it = weak;
+			if (!it) return;
+			if (!track) return TTALog(@"tap: no audio track (%@)", e.localizedDescription);
+			objc_setAssociatedObject(it, &kTrackKey, track, OBJC_ASSOCIATION_RETAIN);
+			it.audioMix = it.audioMix;
+			TTALog(@"tap: attached to track %d", track.trackID);
 		});
-		return;
-	}
-	objc_setAssociatedObject(item, &kTrackKey, track, OBJC_ASSOCIATION_RETAIN);
-	item.audioMix = item.audioMix;
-	TTALog(@"tap: attached to track %d", track.trackID);
+	}];
 }
 
 static void (*orig_insert)(AVQueuePlayer *, SEL, AVPlayerItem *, AVPlayerItem *);
 static void hook_insert(AVQueuePlayer *self, SEL _cmd, AVPlayerItem *item, AVPlayerItem *after) {
 	NSString *uri = ((AVURLAsset *)TTAAs(item.asset, AVURLAsset.class)).URL.absoluteString;
-	if (uri && [gV1 objectForKey:uri]) {
+	BOOL v1;
+	@synchronized (gV1) {
+		v1 = uri && gV1[uri];
+	}
+	if (v1) {
 		objc_setAssociatedObject(item, &kURIKey, uri, OBJC_ASSOCIATION_COPY);
-		dispatch_async(dispatch_get_main_queue(), ^{ TTAAttach(item, 0); });
+		TTAAttach(item);
 	}
 	orig_insert(self, _cmd, item, after);
 }
@@ -393,8 +407,7 @@ void TTAudioAdd(const TTAudioStage *stage) {
 	gStages[gCount++] = *stage;
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
-		gV1 = [NSCache new];
-		gV1.countLimit = 50;
+		gV1 = [NSMutableDictionary dictionary];
 		[NSURLProtocol registerClass:TTAProtocol.class];
 		Class cfg = object_getClass(NSURLSessionConfiguration.defaultSessionConfiguration);
 		Method m = class_getInstanceMethod(cfg, @selector(protocolClasses));

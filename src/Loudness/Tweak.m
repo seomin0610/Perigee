@@ -11,7 +11,7 @@ static NSString *const kBoost = @"ld.boost";
 static NSString *const kEQ = @"ld.eq";
 static NSString *const kCompare = @"ld.compare";
 static const double kTidalPreAmp = 4, kMaxGain = 4, kTargetLufs = -14;
-static NSCache<NSString *, NSNumber *> *gBoost;
+static NSMutableDictionary<NSString *, NSNumber *> *gBoost;
 
 static void LDLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
 static void LDLog(NSString *fmt, ...) {
@@ -48,7 +48,9 @@ static NSData *LDRewrite(NSData *body, BOOL v1) {
 	double offset = [NSUserDefaults.standardUserDefaults doubleForKey:kOffset];
 	double total = MIN(pow(10, (gain.doubleValue + kTidalPreAmp + offset) / 20), kMaxGain);
 	if (boost) {
-		[gBoost setObject:@(total) forKey:uri];
+		@synchronized (gBoost) {
+			gBoost[uri] = @(total);
+		}
 		[attrs removeObjectForKey:@"albumAudioNormalizationData"];
 	} else
 		attrs[@"albumAudioNormalizationData"] = @{ @"replayGain": @(gain.doubleValue + offset), @"peakAmplitude": track[@"peakAmplitude"] ?: album[@"peakAmplitude"] ?: @1 };
@@ -85,7 +87,10 @@ static void LDFree(void *ctx) {
 }
 
 static void *LDPrepare(NSString *uri, double rate, unsigned ch, unsigned maxFrames) {
-	NSNumber *gain = [gBoost objectForKey:uri];
+	NSNumber *gain;
+	@synchronized (gBoost) {
+		gain = gBoost[uri];
+	}
 	if (!gain) return NULL;
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
@@ -134,8 +139,8 @@ static void LDProcess(void *ctx, float **p, unsigned stride, size_t frames, BOOL
 
 static NSString *LDStatus(void) {
 	if (CFAbsoluteTimeGetCurrent() - atomic_load(&gNowAt) > 2)
-		return LDL(@"Nothing playing through Perigee's audio. TIDAL's own stream (no Secondary Login) is only turned down.",
-		           @"Perigee 오디오로 재생 중인 곡이 없어요. TIDAL 스트림(보조 로그인 없음)은 볼륨을 줄이기만 해요.");
+		return LDL(@"This song isn't playing through Perigee's audio (paused, downloaded song, or no Secondary Login), so it's only turned down.",
+		           @"지금 곡은 Perigee 오디오를 안 거쳐요(일시정지, 저장한 곡, 보조 로그인 없음). 이런 곡은 볼륨을 줄이기만 해요.");
 	float squeeze = 20 * log10f(atomic_exchange(&gSqueeze, 1)), bass = atomic_load(&gNowBass), treble = atomic_load(&gNowTreble);
 	NSMutableString *s = [NSMutableString stringWithFormat:LDL(@"This song %+.1f dB", @"이 곡 %+.1f dB"), 20 * log10f(atomic_load(&gNowGain))];
 	if (squeeze < -0.1f) [s appendFormat:LDL(@" · limiter up to %.1f dB", @" · 리미터 최대 %.1f dB"), squeeze];
@@ -204,8 +209,7 @@ __attribute__((constructor)) static void LDInit(void) {
 	[NSUserDefaults.standardUserDefaults removeObjectForKey:kCompare];
 	id eq = [NSUserDefaults.standardUserDefaults objectForKey:kEQ];
 	atomic_store(&gEQ, eq ? [eq boolValue] : YES);
-	gBoost = [NSCache new];
-	gBoost.countLimit = 50;
+	gBoost = [NSMutableDictionary dictionary];
 	TTAudioAddFn add = dlsym(RTLD_DEFAULT, "TTAudioAdd");
 	if (!add) return LDLog(@"needs TidalCore");
 	static const TTAudioStage stage = { LDBoostOn, LDRewrite, LDPrepare, LDProcess, LDFree };
