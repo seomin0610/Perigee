@@ -348,7 +348,26 @@ static NSDictionary *LLOut(NSDictionary *info, NSString *line, NSDictionary *art
 static __weak NSDictionary *gShownArt;
 static id gShownCard;
 
+// TIDAL only targets likeCommand on CarPlay, so on iPhone the lock screen star is ours
+static void LLStar(void) {
+	MPFeedbackCommand *c = MPRemoteCommandCenter.sharedCommandCenter.likeCommand;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		c.localizedTitle = c.localizedShortTitle = [NSLocale.preferredLanguages.firstObject hasPrefix:@"ko"] ? @"전체화면 가사" : @"Full-Screen Lyrics";
+		[c addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *e) {
+			[NSUserDefaults.standardUserDefaults setBool:!LLOn(@"full") forKey:@"ll.full"];
+			LLLog(@"star: full %d", LLOn(@"full"));
+			LLSend(YES);
+			return MPRemoteCommandHandlerStatusSuccess;
+		}];
+	});
+	BOOL shown = LLOn(@"lyrics") && LLTallKey(), active = LLOn(@"full");
+	if (c.enabled != shown) c.enabled = shown;
+	if (c.active != active) c.active = active;
+}
+
 void LLSend(BOOL force) {
+	LLStar();
 	NSDictionary *info;
 	double at;
 	@synchronized (gLock) {
