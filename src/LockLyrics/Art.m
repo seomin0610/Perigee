@@ -250,9 +250,11 @@ static UIImage *LLFirstFrame(NSURL *url) {
 }
 
 static id LLAnimated(NSString *artId, NSURL *file) {
-	if (!file || !LLFirstFrame(file)) return nil;
+	UIImage *img = file ? LLFirstFrame(file) : nil;
+	NSData *first = img ? UIImageJPEGRepresentation(img, 0.9) : nil;
+	if (!first) return nil;
 	return [[NSClassFromString(@"MPMediaItemAnimatedArtwork") alloc] initWithArtworkID:artId
-		previewImageRequestHandler:^(CGSize size, void (^completion)(UIImage *)) { completion(LLFirstFrame(file)); }
+		previewImageRequestHandler:^(CGSize size, void (^completion)(UIImage *)) { completion([UIImage imageWithData:first]); }
 		videoAssetFileURLRequestHandler:^(CGSize size, void (^completion)(NSURL *)) { completion(file); }];
 }
 
