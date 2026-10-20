@@ -1,5 +1,6 @@
 #import <AVFoundation/AVFoundation.h>
 #import <MediaToolbox/MediaToolbox.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 #import <os/log.h>
 #import "TTAudio.h"
@@ -11,7 +12,7 @@ static NSString *const kHandled = @"TTAudioHandled";
 static TTAudioStage gStages[kMaxStages];
 static unsigned gCount;
 // not NSCache: it empties when the screen turns off
-static NSMutableDictionary<NSString *, NSNumber *> *gV1;
+static NSMutableDictionary<NSString *, NSDictionary *> *gV1;
 static char kURIKey, kTrackKey;
 
 static void TTALog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
@@ -134,12 +135,16 @@ static NSDictionary *TTAGain(id gain, id peak) {
 
 static NSData *TTAV1Manifest(NSString *track, NSDictionary *info, NSString *uri) {
 	NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
-	@synchronized (gV1) {
-		gV1[uri] = @YES;
-	}
 	attrs[@"uri"] = uri;
 	NSString *format = @{ @"HI_RES_LOSSLESS": @"FLAC_HIRES", @"LOSSLESS": @"FLAC", @"HIGH": @"AACLC", @"LOW": @"HEAACV1" }[TTAAs(info[@"audioQuality"], NSString.class) ?: @""];
 	if (format) attrs[@"formats"] = @[ format ];
+	NSMutableDictionary *meta = [NSMutableDictionary dictionary];
+	meta[@"format"] = format;
+	meta[@"sampleRate"] = TTAAs(info[@"sampleRate"], NSNumber.class);
+	meta[@"bitDepth"] = TTAAs(info[@"bitDepth"], NSNumber.class);
+	@synchronized (gV1) {
+		gV1[uri] = meta;
+	}
 	attrs[@"trackPresentation"] = TTAAs(info[@"assetPresentation"], NSString.class);
 	attrs[@"hash"] = TTAAs(info[@"manifestHash"], NSString.class);
 	attrs[@"trackAudioNormalizationData"] = TTAGain(info[@"trackReplayGain"], info[@"trackPeakAmplitude"]);
@@ -375,6 +380,69 @@ static void TTAAttach(AVPlayerItem *item) {
 	}];
 }
 
+@interface TTAFormatGroup : AVDateRangeMetadataGroup
+@end
+
+@implementation TTAFormatGroup
+- (NSString *)classifyingLabel { return @"com.tidal.format"; }
+@end
+
+static char kCollectorKey, kObserverKey;
+
+static void TTADeliver(AVPlayerItem *item) {
+	AVPlayerItemMetadataCollector *mc = objc_getAssociatedObject(item, &kCollectorKey);
+	NSString *uri = ((AVURLAsset *)TTAAs(item.asset, AVURLAsset.class)).URL.absoluteString;
+	NSDictionary *meta;
+	@synchronized (gV1) {
+		meta = uri ? gV1[uri] : nil;
+	}
+	id d = mc.delegate;
+	if (!meta[@"format"] || !d) return;
+	NSMutableArray *mis = [NSMutableArray array];
+	for (NSArray *kv in @[ @[ @"X-COM-TIDAL-FORMAT", meta[@"format"] ], @[ @"X-COM-TIDAL-SAMPLE-RATE", meta[@"sampleRate"] ?: NSNull.null ], @[ @"X-COM-TIDAL-SAMPLE-DEPTH", meta[@"bitDepth"] ?: NSNull.null ] ]) {
+		if (kv[1] == NSNull.null) continue;
+		AVMutableMetadataItem *mi = [AVMutableMetadataItem metadataItem];
+		mi.key = kv[0];
+		mi.keySpace = AVMetadataKeySpaceHLSDateRange;
+		mi.value = kv[1];
+		[mis addObject:mi];
+	}
+	AVDateRangeMetadataGroup *g = [[TTAFormatGroup alloc] initWithItems:mis startDate:NSDate.date endDate:nil];
+	dispatch_async(mc.delegateQueue ?: dispatch_get_main_queue(), ^{
+		SEL sel = sel_registerName("metadataCollector:didCollectDateRangeMetadataGroups:indexesOfNewGroups:indexesOfModifiedGroups:");
+		if ([d respondsToSelector:sel]) ((void (*)(id, SEL, id, id, id, id))objc_msgSend)(d, sel, mc, @[ g ], [NSIndexSet indexSetWithIndex:0], [NSIndexSet indexSet]);
+	});
+}
+
+// ponytail: the SDK drops format metadata unless the item is already registered and current, so resend on a short timer and whenever the queue advances
+static void TTADeliverSoon(AVPlayerItem *item) {
+	TTADeliver(item);
+	__weak AVPlayerItem *weak = item;
+	for (NSNumber *delay in @[ @0.1, @0.25, @0.5, @1, @2, @4 ])
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+			if (weak) TTADeliver(weak);
+		});
+}
+
+@interface TTACurrent : NSObject
+@end
+
+@implementation TTACurrent
+- (void)observeValueForKeyPath:(NSString *)path ofObject:(AVQueuePlayer *)player change:(NSDictionary *)change context:(void *)ctx {
+	AVPlayerItem *item = TTAAs(change[NSKeyValueChangeNewKey], AVPlayerItem.class);
+	if (item) TTADeliverSoon(item);
+}
+@end
+
+static void (*orig_addCollector)(AVPlayerItem *, SEL, AVPlayerItemMediaDataCollector *);
+static void hook_addCollector(AVPlayerItem *self, SEL _cmd, AVPlayerItemMediaDataCollector *collector) {
+	orig_addCollector(self, _cmd, collector);
+	AVPlayerItemMetadataCollector *mc = TTAAs(collector, AVPlayerItemMetadataCollector.class);
+	if (!mc) return;
+	objc_setAssociatedObject(self, &kCollectorKey, mc, OBJC_ASSOCIATION_RETAIN);
+	TTADeliverSoon(self);
+}
+
 static void (*orig_insert)(AVQueuePlayer *, SEL, AVPlayerItem *, AVPlayerItem *);
 static void hook_insert(AVQueuePlayer *self, SEL _cmd, AVPlayerItem *item, AVPlayerItem *after) {
 	NSString *uri = ((AVURLAsset *)TTAAs(item.asset, AVURLAsset.class)).URL.absoluteString;
@@ -385,6 +453,11 @@ static void hook_insert(AVQueuePlayer *self, SEL _cmd, AVPlayerItem *item, AVPla
 	if (v1) {
 		objc_setAssociatedObject(item, &kURIKey, uri, OBJC_ASSOCIATION_COPY);
 		TTAAttach(item);
+		if (!objc_getAssociatedObject(self, &kObserverKey)) {
+			TTACurrent *o = [TTACurrent new];
+			objc_setAssociatedObject(self, &kObserverKey, o, OBJC_ASSOCIATION_RETAIN);
+			[self addObserver:o forKeyPath:@"currentItem" options:NSKeyValueObservingOptionNew context:NULL];
+		}
 	}
 	orig_insert(self, _cmd, item, after);
 }
@@ -415,6 +488,7 @@ void TTAudioAdd(const TTAudioStage *stage) {
 		if (class_addMethod(cfg, @selector(protocolClasses), (IMP)hook_protocolClasses, method_getTypeEncoding(m))) orig_protocolClasses = (void *)method_getImplementation(m);
 		else orig_protocolClasses = (void *)method_setImplementation(m, (IMP)hook_protocolClasses);
 		TTASwap(AVQueuePlayer.class, @selector(insertItem:afterItem:), (IMP)hook_insert, &orig_insert);
+		TTASwap(AVPlayerItem.class, @selector(addMediaDataCollector:), (IMP)hook_addCollector, &orig_addCollector);
 		TTASwap(AVPlayerItem.class, @selector(setAudioMix:), (IMP)hook_setAudioMix, &orig_setAudioMix);
 		TTALog(@"ready");
 	});
