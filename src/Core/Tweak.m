@@ -21,6 +21,7 @@ static void TTLog(NSString *fmt, ...) {
 #ifndef TT_BUILD
 #define TT_BUILD @"dev"
 #endif
+#define TT_DEV [TT_BUILD isEqualToString:@"dev"]
 static NSString *const kRepo = @"seomin0610/Perigee";
 
 static NSString *TTL(NSString *en, NSString *ko) {
@@ -510,7 +511,8 @@ static NSString *TTString(id textOrBlock) {
 			UIButton *ba = (UIButton *)a;
 			ba.menu = ((UIButton *)b).menu;
 			ba.enabled = ((UIButton *)b).enabled;
-			[ba sizeToFit];
+			ba.frame = (CGRect){ ba.frame.origin, ba.intrinsicContentSize };
+			[cell setNeedsLayout];
 		} else if (a.class != b.class) cell.accessoryView = b;
 	}
 	if ([self respondsToSelector:@selector(tableView:titleForFooterInSection:)])
@@ -791,7 +793,7 @@ static NSString *TTString(id textOrBlock) {
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 4; }
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 3 ? 3 + (_showTweaks ? gLoaded.count : 0) : s == 2 ? 3 : 1; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return s == 0 ? _tweaks.count + (_rlOpen != NULL) : s == 3 ? 3 + (_showTweaks ? gLoaded.count : 0) : s == 2 ? 3 + TT_DEV : 1; }
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 2 ? TTL(@"Advanced", @"고급") : s == 3 ? TTL(@"About Perigee", @"Perigee 정보") : nil; }
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
@@ -837,7 +839,7 @@ static NSString *TTString(id textOrBlock) {
 		c.textProperties.color = user ? UIColor.systemRedColor : self.view.tintColor;
 	} else if (ip.section == 2) {
 		c = UIListContentConfiguration.cellConfiguration;
-		c.text = ip.row ? TTL(@"Export Logs", @"로그 내보내기") : TTL(@"Reset Onboarding", @"온보딩 상태 재설정");
+		c.text = ip.row == 3 ? TTL(@"Test Update Sheet", @"업데이트 창 테스트") : ip.row ? TTL(@"Export Logs", @"로그 내보내기") : TTL(@"Reset Onboarding", @"온보딩 상태 재설정");
 		c.textProperties.color = self.view.tintColor;
 	} else if (ip.row == 0) {
 		c = UIListContentConfiguration.valueCellConfiguration;
@@ -891,6 +893,7 @@ static NSString *TTString(id textOrBlock) {
 	if (ip.section == 0 && ip.row == (NSInteger)_tweaks.count) _rlOpen(self);
 	else if (ip.section == 0) [self.navigationController pushViewController:[[TTTweakPage alloc] initWithTweak:_tweaks[ip.row]] animated:YES];
 	else if (ip.section == 2 && ip.row == 2) TTV1User() ? TTV1Save(nil) : TTV1Login();
+	else if (ip.section == 2 && ip.row == 3) TTShowUpdate(@"999999-9999", @"## Test\n- **Bold** item\n- `code`\n> quote\n\nhttps://github.com/seomin0610/Perigee");
 	else if (ip.section == 2 && ip.row) [self exportLogs:[tv cellForRowAtIndexPath:ip]];
 	else if (ip.section == 2) {
 		[NSUserDefaults.standardUserDefaults removeObjectForKey:kSeenBuild];
