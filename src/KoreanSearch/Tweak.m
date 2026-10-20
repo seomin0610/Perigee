@@ -215,8 +215,8 @@ static NSArray *hook_protocolClasses(NSURLSessionConfiguration *self, SEL _cmd) 
 		   @"footer": KSL(@"Turn all three off and nothing gets added.", @"셋 다 끄면 아무것도 안 넣어요.") },
 		@{ @"items": @[ @{ @"type": @"choice", @"key": @"ks.maxResults", @"default": @8, @"title": KSL(@"Songs added", @"넣는 곡 수"), @"set": again,
 		                   @"options": @[ @[ @3, @"3" ], @[ @5, @"5" ], @[ @8, @"8" ], @[ @12, @"12" ], @[ @20, @"20" ] ] } ],
-		   @"footer": KSL(@"Songs found by their Korean name go on top of Tracks, the first three also on top of Top results, marked with the Korean title.",
-		                  @"한글 이름으로 찾은 곡을 Tracks 맨 위에, 앞 3곡은 Top results 위에도 넣어요. 한글 제목을 붙여 표시해요.") },
+		   @"footer": KSL(@"Songs found by their Korean name go on top of Tracks, the first three also on top of Top results, marked with the Korean title.\n\nIf you don't search in Korean, there's no need to use this.",
+		                  @"한글 이름으로 찾은 곡을 Tracks 맨 위에, 앞 3곡은 Top results 위에도 넣어요. 한글 제목을 붙여 표시해요.\n\n한국인이 아니라면 굳이 사용할 필요 없어요.") },
 	];
 }
 @end
