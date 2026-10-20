@@ -9,6 +9,7 @@
 #import <os/log.h>
 #import <QuartzCore/QuartzCore.h>
 #import "Analyze.h"
+#import "Scene.h"
 
 static void HTLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
 static void HTLog(NSString *fmt, ...) {
@@ -52,7 +53,7 @@ static BOOL HTSendISRC(void) {
 	return HTOn() && (HTApple() || (HTHandoff() && UIApplication.sharedApplication.applicationState != UIApplicationStateActive));
 }
 
-static NSString *HTL(NSString *en, NSString *ko) {
+NSString *HTL(NSString *en, NSString *ko) {
 	NSInteger lang = [NSUserDefaults.standardUserDefaults integerForKey:@"rl.lang"];
 	return (lang ? lang == 2 : [NSLocale.preferredLanguages.firstObject hasPrefix:@"ko"]) ? ko : en;
 }
@@ -555,11 +556,13 @@ static void HTTick(void) {
 	for (; gNext < count && taps[gNext].time < end; gNext++) {
 		HTTap t = taps[gNext];
 		if (follow == 2 && t.kind == HTSnare) continue;
-		BOOL kick = t.kind == HTKick;
+		float power = fmin(1, t.strength * k * (t.kind == HTKick ? 1 : 0.8));
+		double in = MAX(0, (t.time - now) / rate);
+		HSAddHit(CACurrentMediaTime() + in, power, t.kind);
 		[events addObject:[[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticTransient
-		                                                parameters:@[ HTParam(CHHapticEventParameterIDHapticIntensity, fmin(1, t.strength * k * (kick ? 1 : 0.8))),
+		                                                parameters:@[ HTParam(CHHapticEventParameterIDHapticIntensity, power),
 		                                                              HTParam(CHHapticEventParameterIDHapticSharpness, t.sharpness) ]
-		                                              relativeTime:MAX(0, (t.time - now) / rate)]];
+		                                              relativeTime:in]];
 	}
 	gUntil = end;
 	if (events.count) {
@@ -576,6 +579,7 @@ static void HTTick(void) {
 		for (NSUInteger i = (NSUInteger)(now / gSlot), first = i; curve.count < 16 && (i == first || i * gSlot < end + gSlot); i++)
 			[curve addObject:[[CHHapticParameterCurveControlPoint alloc] initWithRelativeTime:i == first ? 0 : (i * gSlot - now) / rate
 			                                                                            value:i < slots ? fmin(1, levels[i] * k * 0.6) : 0]];
+	HSSetLevel(CACurrentMediaTime(), curve.firstObject.value);
 	HTRumble(curve);
 }
 
@@ -609,7 +613,6 @@ static void HTSetOn(BOOL on) {
 
 static NSString *HTAppleStatus(void) {
 	if (!kISRCKey) return HTL(@"Needs iOS 18", @"iOS 18 이상 필요");
-	if (!HTSystemOn()) return HTL(@"Off in iOS: Settings > Accessibility > Music Haptics", @"iOS에서 꺼짐: 설정 > 손쉬운 사용 > 음악 햅틱");
 	if (!HTOn()) return nil;
 	if (!gInfo) return HTL(@"Nothing playing", @"재생 중인 곡 없음");
 	if (!gInfo[kISRCKey]) return HTL(@"This song: not identified (no ISRC)", @"이 곡: 식별 못 함 (ISRC 없음)");
@@ -631,8 +634,7 @@ static NSString *HTOwnStatus(void) {
 	                : gLoad == HTFailed ? HTL(@"This song: couldn't get its audio", @"이 곡: 오디오를 못 받았어요")
 	                : [NSString stringWithFormat:HTL(@"This song: %lu taps", @"이 곡: 탭 %lu개"), (unsigned long)(gTaps.length / sizeof(HTTap))];
 	if (!HTHandoff()) return [now stringByAppendingString:HTL(@"\nPlays while TIDAL is on screen.", @"\nTIDAL 화면이 켜져 있을 때만 울려요.")];
-	return [now stringByAppendingString:!HTSystemOn() ? HTL(@"\nOff screen: Apple haptic tracks are off in iOS (Settings > Accessibility > Music Haptics).", @"\n앱 밖: iOS에서 Apple 햅틱이 꺼져 있어요 (설정 > 손쉬운 사용 > 음악 햅틱).")
-	                                                  : HTL(@"\nOff screen: Apple haptic tracks take over.", @"\n앱 밖에서는 Apple 햅틱 트랙으로 넘어가요.")];
+	return [now stringByAppendingString:HTL(@"\nOff screen: Apple haptic tracks take over.", @"\n앱 밖에서는 Apple 햅틱 트랙으로 넘어가요.")];
 }
 
 static NSString *HTStatus(void) {
@@ -704,6 +706,7 @@ static void HTAddSettingsEntry(UIViewController *vc) {
 		@{ @"type": @"choice", @"key": kStrengthKey, @"default": @1, @"title": HTL(@"Strength", @"세기"), @"visible": own,
 		   @"options": @[ @[ @0.5, @"50%" ], @[ @1, @"100%" ], @[ @1.5, @"150%" ], @[ @2, @"200%" ] ] },
 		@{ @"type": @"switch", @"key": kHandoffKey, @"default": @YES, @"title": HTL(@"Apple Haptics Off Screen", @"앱 밖에서 Apple 햅틱"), @"visible": own, @"set": ^(id v) { HTApply(); } },
+		@{ @"type": @"action", @"title": HTL(@"Vibrations Preview", @"진동 미리보기"), @"visible": own, @"set": ^{ HTShowPreview(); } },
 		@{ @"type": @"action", @"title": HTL(@"Secondary Login", @"보조 로그인"), @"set": ^{ if (login) login(); },
 		   @"visible": ^BOOL { return own() && login && user && !user(); } },
 	],
@@ -730,7 +733,7 @@ __attribute__((constructor)) static void HTInit(void) {
 		if (p) [gPlayers addObject:p];
 		HTWake();
 	}];
-	for (NSNotificationName name in @[ UIApplicationDidBecomeActiveNotification, UIApplicationWillResignActiveNotification ])
+	for (NSNotificationName name in @[ UIApplicationDidBecomeActiveNotification, UIApplicationWillResignActiveNotification, UIApplicationDidEnterBackgroundNotification ])
 		[NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { HTApply(); }];
 
 	Method set = class_getInstanceMethod(MPNowPlayingInfoCenter.class, @selector(setNowPlayingInfo:));

@@ -10,6 +10,8 @@ Follows: Everything (taps and rumble), Beat (taps only) or Bass (kick taps and r
 
 Self-check of the analyzer: `cc -O2 analyze_test.c -lm && ./a.out`
 
+Vibrations Preview (settings): a dot disc that ripples with each tap and swells with the rumble (Metal), a demo loop when nothing plays; tap it to feel one. Self-check of its scene: `cc -O2 scene_test.c -lm && ./a.out`
+
 ## Apple haptic tracks
 
 Info.plist `MusicHapticsSupported` plus the song's ISRC in the now playing info: iOS plays Apple's own haptic track (Apple Music catalog songs only, iOS 18+, Settings > Accessibility > Music Haptics on). Works in the background.
