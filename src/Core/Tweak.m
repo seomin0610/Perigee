@@ -277,6 +277,45 @@ static void TTCheckUpdate(BOOL manual) {
 	}] resume];
 }
 
+static void TTShowChanges(void) {
+	BOOL dev = [TT_BUILD isEqualToString:@"dev"];
+	NSString *path = dev ? @"latest" : [@"tags/v" stringByAppendingString:TT_BUILD];
+	NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithFormat:@"https://api.github.com/repos/%@/releases/%@", kRepo, path]]];
+	[req setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+	[[NSURLSession.sharedSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+		NSDictionary *j = data ? TTAs([NSJSONSerialization JSONObjectWithData:data options:0 error:nil], NSDictionary.class) : nil;
+		NSString *notes = TTAs(j[@"body"], NSString.class);
+		NSString *tag = TTAs(j[@"tag_name"], NSString.class) ?: TT_BUILD;
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if (!notes.length) return TTAlert(TTL(@"Couldn't load what's new", @"변경 내용을 불러오지 못했어요"), TTL(@"Check your connection and try again.", @"연결을 확인하고 다시 시도해 주세요."), nil);
+			UIViewController *vc = [UIViewController new];
+			vc.title = TTL(@"What's New", @"이번 업데이트");
+			vc.view.backgroundColor = UIColor.systemBackgroundColor;
+			__weak UIViewController *wvc = vc;
+			vc.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemClose primaryAction:[UIAction actionWithHandler:^(UIAction *a) {
+				[wvc dismissViewControllerAnimated:YES completion:nil];
+			}]];
+			UIFont *title = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+			NSMutableAttributedString *text = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@\n\n", tag] attributes:@{
+				NSFontAttributeName: [UIFont fontWithDescriptor:[title.fontDescriptor fontDescriptorWithSymbolicTraits:UIFontDescriptorTraitBold] size:0],
+				NSForegroundColorAttributeName: UIColor.labelColor }];
+			[text appendAttributedString:TTNotes(notes)];
+			UITextView *tv = [UITextView new];
+			tv.attributedText = text;
+			tv.editable = NO;
+			tv.dataDetectorTypes = UIDataDetectorTypeLink;
+			tv.textContainerInset = UIEdgeInsetsMake(8, 16, 16, 16);
+			tv.frame = vc.view.bounds;
+			tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+			[vc.view addSubview:tv];
+			UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+			nav.sheetPresentationController.detents = @[ UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent ];
+			nav.sheetPresentationController.prefersGrabberVisible = YES;
+			[TTTop() presentViewController:nav animated:YES completion:nil];
+		});
+	}] resume];
+}
+
 #pragma mark - v1 login
 
 static NSString *const kV1Scope = @"r_usr w_usr w_sub";
@@ -845,7 +884,7 @@ static NSString *TTString(id textOrBlock) {
 		c = UIListContentConfiguration.valueCellConfiguration;
 		c.text = TTL(@"Version", @"버전");
 		c.secondaryText = TT_BUILD;
-		cell.selectionStyle = UITableViewCellSelectionStyleNone;
+		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 	} else if (ip.row == 1) {
 		c = UIListContentConfiguration.valueCellConfiguration;
 		c.text = TTL(@"Check for Updates", @"업데이트 확인");
@@ -898,7 +937,8 @@ static NSString *TTString(id textOrBlock) {
 	else if (ip.section == 2) {
 		[NSUserDefaults.standardUserDefaults removeObjectForKey:kSeenBuild];
 		TTAlert(TTL(@"Onboarding reset", @"온보딩 상태를 재설정했어요"), TTL(@"Settings will open the next time TIDAL starts.", @"다음에 TIDAL을 열면 설정이 다시 떠요."), nil);
-	} else if (ip.section == 3 && ip.row == 1) TTCheckUpdate(YES);
+	} else if (ip.section == 3 && ip.row == 0) TTShowChanges();
+	else if (ip.section == 3 && ip.row == 1) TTCheckUpdate(YES);
 	else if (ip.section == 3 && ip.row == 2) {
 		_showTweaks = !_showTweaks;
 		NSMutableArray *rows = [NSMutableArray array];
