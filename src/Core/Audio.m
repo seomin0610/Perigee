@@ -60,12 +60,11 @@ static NSString *TTAPlaybackTrack(NSURLRequest *r) {
 	           : nil;
 }
 
-// hi-res asks for LOSSLESS: the whole file is downloaded before it plays
 static NSString *TTAQuality(NSURL *u) {
 	NSMutableArray *formats = [NSMutableArray array];
 	for (NSURLQueryItem *q in [NSURLComponents componentsWithURL:u resolvingAgainstBaseURL:NO].queryItems)
 		if ([q.name hasPrefix:@"formats"] && q.value) [formats addObjectsFromArray:[q.value componentsSeparatedByString:@","]];
-	for (NSArray *p in @[ @[ @"FLAC_HIRES", @"LOSSLESS" ], @[ @"FLAC", @"LOSSLESS" ], @[ @"AACLC", @"HIGH" ] ])
+	for (NSArray *p in @[ @[ @"FLAC_HIRES", @"HI_RES_LOSSLESS" ], @[ @"FLAC", @"LOSSLESS" ], @[ @"AACLC", @"HIGH" ] ])
 		if ([formats containsObject:p[0]]) return p[1];
 	return @"LOW";
 }
