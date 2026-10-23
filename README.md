@@ -1,6 +1,9 @@
 Perigee for TIDAL
 ======================================
 
+> [!WARNING]
+> To use Perigee, you need a Tidal subscription
+
 | Tweak | What it does |
 |---|---|
 | [Core](src/Core) | Settings hub: installed tweaks and versions, on/off, every tweak's settings, update notice |
@@ -17,6 +20,13 @@ Perigee for TIDAL
 | [RadiantTidal](external/RadiantTidal) | Radiant Lyrics (submodule, GPL-3.0) |
 
 Each tweak also works on its own.
+
+## Download
+<h3 align="center">
+<a href="https://altdirect.app/?url=https://waterwave.space/Perigee.json"><img src="https://altdirect.app/assets/png/AltSource_Blue.png" target="_blank" width="200"></a>
+&nbsp;
+<a href="https://waterwave.space/getPerigee/latest"><img src="https://altdirect.app/assets/png/Download_Blue.png" target="_blank" width="200"></a>
+</h3>
 
 ## Build
 
