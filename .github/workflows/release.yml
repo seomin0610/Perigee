@@ -5,20 +5,40 @@ on:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
 
 jobs:
-  build:
-    uses: ./.github/workflows/build.yml
-    secrets: inherit
-
   release:
-    needs: build
-    runs-on: ubuntu-latest
+    runs-on: macos-26
     permissions:
       contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer # ships the iPhoneOS26.5 SDK the Makefiles target
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@v7
         with:
-          name: Perigee
+          submodules: recursive
+          fetch-depth: 0 # git describe needs the tags
 
-      - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes Perigee_*.ipa Perigee_*.deb
+      - name: Install Theos and cyan
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # install-sdk calls the GitHub API
+        run: |
+          brew install ldid dpkg
+          git clone --recursive --depth 1 https://github.com/theos/theos.git ~/theos
+          THEOS=~/theos ~/theos/bin/install-sdk iPhoneOS16.5 >/dev/null # RadiantTidal targets 16.5; Xcode only has 26.5
+          pipx install https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Download TIDAL IPA
+        env:
+          IPA_URL: ${{ secrets.IPA_URL }}
+        run: |
+          [ -n "$IPA_URL" ] || { echo "::error::Set the IPA_URL secret"; exit 1; }
+          curl -fsSL -o tidal.ipa "$IPA_URL"
+
+      - name: Build
+        env:
+          TT_BUILD: ${{ github.ref_name }}
+        run: ./build-all.sh tidal.ipa
+
+      - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes Perigee_*.deb
         env:
           GH_TOKEN: ${{ github.token }}
