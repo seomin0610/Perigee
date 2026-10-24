@@ -809,9 +809,9 @@ static void MTPresent(NSArray<MTMeaning *> *items) {
 	[gHost presentViewController:card animated:YES completion:nil];
 }
 
-#pragma mark - Holding a line of RadiantTidal's lyrics
+#pragma mark - Holding a line of PerigeeLyrics' lyrics
 
-// RadiantTidal's lyrics view, read by its ivar and property names only (no shared code):
+// PerigeeLyrics' lyrics view, read by its ivar and property names only (no shared code):
 // RLLyricsView { UIScrollView *_scroll; NSMutableArray<RLLineView *> *_lineViews; },
 // RLLineView.line.main = syllables, each with .text.
 static id MTIvarObj(id obj, const char *name) {
@@ -872,7 +872,7 @@ static void MTAttachHold(void) {
 	UILongPressGestureRecognizer *g = [[UILongPressGestureRecognizer alloc] initWithTarget:MTHold.class action:@selector(held:)];
 	[scroll addGestureRecognizer:g];
 	objc_setAssociatedObject(scroll, @selector(held:), g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-	MTLog(@"long press on RadiantTidal's lyrics");
+	MTLog(@"long press on PerigeeLyrics' lyrics");
 }
 
 static NSArray<NSValue *> *MTRows(UIView *lv) {
@@ -890,7 +890,7 @@ static NSArray<NSValue *> *MTRows(UIView *lv) {
 	return rows;
 }
 
-// Blurred like RadiantTidal: shape moved out of the clip box, only its shadow lands in place
+// Blurred like PerigeeLyrics: shape moved out of the clip box, only its shadow lands in place
 static const CGFloat kMarkMargin = 24;
 
 static CALayer *MTMarkLayer(UIView *lv, NSInteger style, BOOL byArtist) {
@@ -1030,7 +1030,7 @@ static void MTPollUpdate(void) {
 	MTSync();
 }
 
-// Not the footer: RadiantTidal would wrap it again on every visit
+// Not the footer: PerigeeLyrics would wrap it again on every visit
 @interface MTSettingsTarget : NSObject
 @end
 static __weak UIViewController *gSettingsScene;

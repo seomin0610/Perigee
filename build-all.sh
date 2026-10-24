@@ -20,7 +20,7 @@ dylibs="
 src/LockLyrics/TidalLockLyrics.dylib
 src/SideloadFix/TidalSideloadFix.dylib
 src/Privacy/TidalPrivacy.dylib
-external/RadiantTidal/RadiantTidal.dylib
+external/PerigeeLyrics/PerigeeLyrics.dylib
 src/Meanings/TidalMeanings.dylib
 src/KoreanSearch/TidalKoreanSearch.dylib
 src/Offline/TidalOffline.dylib

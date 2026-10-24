@@ -82,7 +82,7 @@ static void TTScan(void) {
 	NSMutableDictionary *found = [NSMutableDictionary dictionary];
 	NSMutableSet *names = [NSMutableSet set]; // not valueForKey:@"firstObject": KVC on an array of arrays goes into the inner arrays too
 	for (NSArray *t in TTTweaks()) [names addObject:t[0]];
-	[names addObject:@"RadiantTidal"];
+	[names addObject:@"PerigeeLyrics"];
 	NSMutableArray *loaded = [NSMutableArray array];
 	for (uint32_t i = 0; i < _dyld_image_count(); i++) {
 		NSString *name = [@(_dyld_get_image_name(i)).lastPathComponent stringByDeletingPathExtension];
@@ -844,8 +844,8 @@ static NSString *TTString(id textOrBlock) {
 	UIListContentConfiguration *c;
 	if (ip.section == 0 && ip.row == (NSInteger)_tweaks.count) {
 		c = UIListContentConfiguration.subtitleCellConfiguration;
-		c.text = @"Radiant Lyrics";
-		c.secondaryText = TTL(@"Its own settings", @"RL 자체 설정");
+		c.text = @"Perigee Lyrics";
+		c.secondaryText = TTL(@"Its own settings", @"자체 설정");
 		c.secondaryTextProperties.color = UIColor.secondaryLabelColor;
 		c.image = [UIImage systemImageNamed:@"music.note.list"];
 		cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -984,7 +984,7 @@ static UITableView *TTFindTable(UIView *v) {
 	return nil;
 }
 
-// Header only: the footer is RadiantTidal's
+// Header only: the footer is PerigeeLyrics'
 static void TTAddSettingsEntry(UIViewController *vc) {
 	UINavigationItem *ni = vc.navigationItem;
 	BOOL has = NO;

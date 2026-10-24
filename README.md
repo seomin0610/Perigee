@@ -17,9 +17,11 @@ Perigee for TIDAL
 | [Loudness](src/Loudness) | Same volume from song to song (TIDAL normalizes by album) |
 | [Karaoke](src/Karaoke) | Turns the vocals down, like a karaoke track |
 | [SideloadFix](src/SideloadFix) | Stay logged in after sideloading (always include it) |
-| [RadiantTidal](external/RadiantTidal) | Radiant Lyrics (submodule, GPL-3.0) |
+| [PerigeeLyrics](external/PerigeeLyrics) | Lyrics, based on [Radiant Lyrics](https://radiant-lyrics.org) by meowarex (modified, GPL-3.0 submodule) |
 
 Each tweak also works on its own.
+
+Perigee Lyrics is based on [Radiant Lyrics](https://radiant-lyrics.org) by meowarex. It is a modified version, not an official Radiant Lyrics build, and does not use the Radiant Lyrics API.
 
 ## Download
 <h3 align="center">

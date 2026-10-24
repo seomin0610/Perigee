@@ -1,6 +1,6 @@
 # TidalKaraoke
 
-Turns the vocals down so the song plays like a karaoke track. The lyrics come from Radiant Lyrics as usual.
+Turns the vocals down so the song plays like a karaoke track. The lyrics come from Perigee Lyrics as usual.
 
 - Apple's voice isolation (`AUSoundIsolation`) picks out the voice and it is taken out of the song
 - where that can't run, the classic way: the part of the middle channel between 120 Hz and 8 kHz is dropped, so kick, bass and air stay

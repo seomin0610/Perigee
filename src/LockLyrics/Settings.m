@@ -30,8 +30,8 @@ static NSString *LLL(NSString *en, NSString *ko) {
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return [self keysIn:s].count; }
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
-	if (s == 0) return LLL(@"The line being sung shows in place of the artist on the lock screen and in Control Center. Lyrics from Radiant Lyrics, then TIDAL, then LRCLIB. Full-Screen Lyrics draws them over the whole lock screen instead. Moving Background slowly animates the blurred cover and uses more battery.",
-	                       @"부르는 중인 가사 줄이 잠금화면과 제어센터의 아티스트 자리에 떠요. 가사는 Radiant Lyrics → TIDAL → LRCLIB 순서로 찾아요. 전체화면 가사를 켜면 아티스트 자리 대신 잠금화면 전체에 그려요. 움직이는 배경을 켜면 블러 배경이 천천히 움직이고 배터리를 더 써요.");
+	if (s == 0) return LLL(@"The line being sung shows in place of the artist on the lock screen and in Control Center. Lyrics from Perigee Lyrics, then TIDAL, then LRCLIB. Full-Screen Lyrics draws them over the whole lock screen instead. Moving Background slowly animates the blurred cover and uses more battery.",
+	                       @"부르는 중인 가사 줄이 잠금화면과 제어센터의 아티스트 자리에 떠요. 가사는 Perigee 가사 → TIDAL → LRCLIB 순서로 찾아요. 전체화면 가사를 켜면 아티스트 자리 대신 잠금화면 전체에 그려요. 움직이는 배경을 켜면 블러 배경이 천천히 움직이고 배터리를 더 써요.");
 	if (s == 1) return LLArtAvailable() ? LLL(@"The album's moving cover plays on the lock screen. TIDAL's own video cover first, then Apple Music's motion cover.",
 	                                          @"앨범의 움직이는 커버가 잠금화면에 재생돼요. TIDAL 영상 커버를 먼저, 없으면 Apple Music 모션 커버를 써요.")
 	                                    : LLL(@"Needs iOS 26 or later.", @"iOS 26 이상이 필요해요.");
@@ -104,8 +104,8 @@ static NSString *LLL(NSString *en, NSString *ko) {
 				      LLSend(YES);
 			      } },
 		   ],
-		   @"footer": LLL(@"The line being sung shows in place of the artist on the lock screen and in Control Center. Lyrics from Radiant Lyrics, then TIDAL, then LRCLIB. Full-Screen Lyrics draws them over the whole lock screen instead. Moving Background slowly animates the blurred cover and uses more battery.",
-		                  @"부르는 중인 가사 줄이 잠금화면과 제어센터의 아티스트 자리에 떠요. 가사는 Radiant Lyrics → TIDAL → LRCLIB 순서로 찾아요. 전체화면 가사를 켜면 아티스트 자리 대신 잠금화면 전체에 그려요. 움직이는 배경을 켜면 블러 배경이 천천히 움직이고 배터리를 더 써요.") },
+		   @"footer": LLL(@"The line being sung shows in place of the artist on the lock screen and in Control Center. Lyrics from Perigee Lyrics, then TIDAL, then LRCLIB. Full-Screen Lyrics draws them over the whole lock screen instead. Moving Background slowly animates the blurred cover and uses more battery.",
+		                  @"부르는 중인 가사 줄이 잠금화면과 제어센터의 아티스트 자리에 떠요. 가사는 Perigee 가사 → TIDAL → LRCLIB 순서로 찾아요. 전체화면 가사를 켜면 아티스트 자리 대신 잠금화면 전체에 그려요. 움직이는 배경을 켜면 블러 배경이 천천히 움직이고 배터리를 더 써요.") },
 		@{ @"items": @[
 			   @{ @"type": @"switch", @"key": @"ll.art", @"default": @YES, @"title": LLL(@"Animated Artwork", @"애니메이션 아트워크"), @"set": art,
 			      @"enabled": ^BOOL { return LLArtAvailable(); } },
