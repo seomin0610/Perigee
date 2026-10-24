@@ -21,7 +21,7 @@ Perigee for TIDAL
 
 Each tweak also works on its own.
 
-Perigee Lyrics is based on [Radiant Lyrics](https://radiant-lyrics.org) by meowarex. It is a modified version, not an official Radiant Lyrics build, and does not use the Radiant Lyrics API.
+Perigee Lyrics is based on [Radiant Lyrics](https://radiant-lyrics.org) by [meowarex](https://github.com/meowarex). It is a modified version, **not an official Radiant Lyrics build**, and does not use the Radiant Lyrics API.
 
 ## Download
 <h3 align="center">
